@@ -12,7 +12,20 @@ actor MLXAudioWhisperBackend: WhisperInferenceBackend {
     private var model: WhisperModel?
 
     func loadModel(named modelName: String) async throws {
-        model = try await WhisperModel.fromPretrained(modelName)
+        model = try await WhisperModel.fromPretrained(
+            Self.resolvedModelName(for: modelName)
+        )
+    }
+
+    static func resolvedModelName(for modelName: String) -> String {
+        switch modelName {
+        case "mlx-community/whisper-base-mlx":
+            "mlx-community/whisper-base-asr-fp16"
+        case "mlx-community/whisper-small-mlx":
+            "mlx-community/whisper-small-asr-fp16"
+        default:
+            modelName
+        }
     }
 
     func transcribe(samples: [Float], language: String) async throws -> String {

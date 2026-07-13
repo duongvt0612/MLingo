@@ -18,6 +18,7 @@ public actor WhisperTranscriptionCoordinator {
     private var silenceTask: Task<Void, Never>?
     private var processingTask: Task<Void, Never>?
     private var windowContinuation: AsyncStream<AudioChunk>.Continuation?
+    private var latestProcessedAudioEnd: TimeInterval?
 
     public init(engine: WhisperEngineProtocol) {
         let configuration = AdaptiveAudioWindowConfiguration()
@@ -52,6 +53,7 @@ public actor WhisperTranscriptionCoordinator {
         errorHandler = onError
         accumulator = AdaptiveAudioWindowAccumulator(configuration: configuration)
         deduplicator.reset()
+        latestProcessedAudioEnd = nil
         diagnostics = WhisperDiagnostics(modelState: .loading, modelID: modelID)
         await onDiagnostics(diagnostics)
 
@@ -110,6 +112,7 @@ public actor WhisperTranscriptionCoordinator {
         processingTask = nil
         accumulator.reset()
         deduplicator.reset()
+        latestProcessedAudioEnd = nil
         transcriptHandler = nil
         diagnosticsHandler = nil
         errorHandler = nil
@@ -136,7 +139,16 @@ public actor WhisperTranscriptionCoordinator {
             diagnostics.inferenceLatency = latency
 
             if let transcript {
-                let emittedTranscript = deduplicator.process(transcript)
+                let timestamp = max(
+                    transcript.timestamp,
+                    latestProcessedAudioEnd ?? transcript.timestamp
+                )
+                let timestampedTranscript = Transcript(
+                    id: transcript.id,
+                    text: transcript.text,
+                    timestamp: timestamp
+                )
+                let emittedTranscript = deduplicator.process(timestampedTranscript)
                 diagnostics.suppressedDuplicateCount = deduplicator.suppressedCount
                 if let emittedTranscript {
                     diagnostics.lastTranscript = emittedTranscript.text
@@ -145,6 +157,10 @@ public actor WhisperTranscriptionCoordinator {
                     }
                 }
             }
+            latestProcessedAudioEnd = max(
+                latestProcessedAudioEnd ?? window.timestamp,
+                window.timestamp + window.duration
+            )
 
             if let diagnosticsHandler {
                 await diagnosticsHandler(diagnostics)
