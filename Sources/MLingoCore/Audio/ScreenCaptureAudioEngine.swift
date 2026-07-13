@@ -56,7 +56,7 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
 
             self.stream = stream
             captureState = .running
-            MLingoLogger.audio.info("ScreenCaptureKit audio capture started with display size \(display.width)x\(display.height)")
+            MLingoLogger.audio.info("ScreenCaptureKit audio capture started with display size \(display.width, privacy: .public)x\(display.height, privacy: .public)")
         } catch {
             let message = error.localizedDescription
             captureState = .failed(message)

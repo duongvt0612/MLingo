@@ -47,7 +47,7 @@ public final class OpenAITranslationEngine: TranslationEngineProtocol, @unchecke
         MLingoLogger.translation.debug("Sending translation request with model \(settings.openAIModel, privacy: .public)")
         let (data, response) = try await httpClient.data(for: request)
         if let httpResponse = response as? HTTPURLResponse, !(200..<300).contains(httpResponse.statusCode) {
-            MLingoLogger.translation.error("OpenAI API returned HTTP \(httpResponse.statusCode)")
+            MLingoLogger.translation.error("OpenAI API returned HTTP \(httpResponse.statusCode, privacy: .public)")
             throw MLingoError.translationFailed("OpenAI API returned HTTP \(httpResponse.statusCode).")
         }
 
