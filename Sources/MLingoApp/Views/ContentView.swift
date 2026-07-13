@@ -57,6 +57,7 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.return, modifiers: [.command])
+            .disabled(viewModel.isTestingSound)
             .accessibilityLabel(viewModel.isRunning ? "Stop live translation" : "Start live translation")
         }
         .padding(.top, 14)
@@ -117,7 +118,7 @@ struct ContentView: View {
     private var readinessGrid: some View {
         Grid(alignment: .leading, horizontalSpacing: 22, verticalSpacing: 10) {
             GridRow {
-                progressRow("System audio capture", isReady: true)
+                progressRow("System audio capture", isReady: isSystemAudioCaptureReady)
                 progressRow("Whisper boundary", isReady: true)
             }
             GridRow {
@@ -188,6 +189,10 @@ struct ContentView: View {
         Label(text, systemImage: isReady ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
             .foregroundStyle(isReady ? .green : .orange)
             .font(.callout)
+    }
+
+    private var isSystemAudioCaptureReady: Bool {
+        viewModel.audioDiagnostics.state == .running
     }
 
     private var statusIconName: String {
