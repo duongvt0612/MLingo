@@ -23,11 +23,13 @@ public final class OpenAITranslationEngine: TranslationEngineProtocol, @unchecke
 
     public func translate(_ transcript: Transcript, settings: AppSettings) async throws -> SubtitleItem {
         guard let apiKey = try apiKeyStore.loadAPIKey(), !apiKey.isEmpty else {
+            MLingoLogger.translation.warning("Translation requested without an OpenAI API key")
             throw MLingoError.missingAPIKey
         }
 
         let sourceText = TranslationPromptBuilder.input(for: transcript)
         guard !sourceText.isEmpty else {
+            MLingoLogger.translation.debug("Skipping translation for empty transcript")
             throw MLingoError.translationFailed("Transcript text is empty.")
         }
 
@@ -42,12 +44,15 @@ public final class OpenAITranslationEngine: TranslationEngineProtocol, @unchecke
             "input": sourceText
         ])
 
+        MLingoLogger.translation.debug("Sending translation request with model \(settings.openAIModel, privacy: .public)")
         let (data, response) = try await httpClient.data(for: request)
         if let httpResponse = response as? HTTPURLResponse, !(200..<300).contains(httpResponse.statusCode) {
+            MLingoLogger.translation.error("OpenAI API returned HTTP \(httpResponse.statusCode, privacy: .public)")
             throw MLingoError.translationFailed("OpenAI API returned HTTP \(httpResponse.statusCode).")
         }
 
         let translated = try TranslationResponseParser.parse(data: data)
+        MLingoLogger.translation.debug("Translation response parsed successfully")
         return SubtitleItem(
             original: transcript.text,
             translated: translated,
