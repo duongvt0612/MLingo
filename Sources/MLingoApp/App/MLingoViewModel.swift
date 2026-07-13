@@ -5,23 +5,33 @@ import Observation
 @MainActor
 @Observable
 final class MLingoViewModel {
+    enum ActiveMode: Equatable {
+        case idle
+        case soundTest
+        case transcriptionTest
+        case translation
+    }
+
     var settings: AppSettings
     var apiKey: String = ""
-    var isRunning = false
-    var isTestingSound = false
+    private(set) var activeMode: ActiveMode = .idle
     var status = "Ready"
     var lastError: String?
     var audioDiagnostics = AudioCaptureDiagnostics()
+    var whisperDiagnostics = WhisperDiagnostics()
+
+    var isRunning: Bool { activeMode == .translation }
+    var isTestingSound: Bool { activeMode == .soundTest }
+    var isTestingTranscription: Bool { activeMode == .transcriptionTest }
+    var isActive: Bool { activeMode != .idle }
 
     private let settingsStore: SettingsStoreProtocol
     private let apiKeyStore: APIKeyStoreProtocol
     private let pipeline: SubtitlePipeline
-    private var translationStartTask: Task<Void, Never>?
-    private var translationSessionID = UUID()
+    private var startTask: Task<Void, Never>?
+    private var activeSessionID = UUID()
     private var soundTestEngine: (any AudioEngineProtocol)?
-    private var soundTestStartTask: Task<Void, Never>?
-    private var soundTestSessionID = UUID()
-    private var soundTestTask: Task<Void, Never>?
+    private var soundDiagnosticsTask: Task<Void, Never>?
 
     init(
         settings: AppSettings,
@@ -33,6 +43,7 @@ final class MLingoViewModel {
         self.settingsStore = settingsStore
         self.apiKeyStore = apiKeyStore
         self.pipeline = pipeline
+        whisperDiagnostics.modelID = settings.whisperModel
     }
 
     static func live() -> MLingoViewModel {
@@ -60,6 +71,7 @@ final class MLingoViewModel {
         do {
             settings = try await settingsStore.load()
             apiKey = try apiKeyStore.loadAPIKey() ?? ""
+            whisperDiagnostics.modelID = settings.whisperModel
         } catch {
             lastError = error.localizedDescription
         }
@@ -81,151 +93,154 @@ final class MLingoViewModel {
     }
 
     func start() {
-        guard !isRunning, translationStartTask == nil else { return }
+        startPipeline(mode: .translation)
+    }
+
+    func stop() {
+        guard activeMode == .translation else { return }
+        stopActiveMode(statusAfterStop: "Stopped")
+    }
+
+    func startTranscriptionTest() {
+        startPipeline(mode: .transcriptionOnly)
+    }
+
+    func stopTranscriptionTest() {
+        guard activeMode == .transcriptionTest else { return }
+        stopActiveMode(statusAfterStop: "Transcription test stopped")
+    }
+
+    func startSoundTest() {
+        guard activeMode == .idle, startTask == nil else { return }
 
         let sessionID = UUID()
-        translationSessionID = sessionID
-        translationStartTask = Task {
-            defer {
-                if translationSessionID == sessionID {
-                    translationStartTask = nil
+        activeSessionID = sessionID
+        activeMode = .soundTest
+        status = "Testing system audio"
+        lastError = nil
+        audioDiagnostics = AudioCaptureDiagnostics(state: .requestingPermission)
+
+        startTask = Task {
+            defer { clearStartTask(for: sessionID) }
+
+            let audioEngine = ScreenCaptureAudioEngine()
+            soundTestEngine = audioEngine
+            soundDiagnosticsTask = Task { [weak self, audioEngine, sessionID] in
+                for await diagnostics in audioEngine.diagnostics {
+                    guard !Task.isCancelled else { return }
+                    await MainActor.run {
+                        guard self?.activeSessionID == sessionID else { return }
+                        self?.audioDiagnostics = diagnostics
+                    }
                 }
             }
 
-            await stopSoundTestSession(statusAfterStop: nil)
-            guard isCurrentTranslationSession(sessionID) else { return }
+            do {
+                try await audioEngine.start()
+                guard isCurrentSession(sessionID, mode: .soundTest) else {
+                    await audioEngine.stop()
+                    return
+                }
+            } catch {
+                guard isCurrentSession(sessionID, mode: .soundTest) else { return }
+                lastError = error.localizedDescription
+                status = "Sound test needs attention"
+                await finishActiveMode(statusAfterStop: nil)
+            }
+        }
+    }
 
-            isRunning = true
-            status = "Starting translation"
-            lastError = nil
+    func stopSoundTest() {
+        guard activeMode == .soundTest else { return }
+        stopActiveMode(statusAfterStop: "Sound test stopped")
+    }
+
+    private func startPipeline(mode: SubtitlePipelineMode) {
+        guard activeMode == .idle, startTask == nil else { return }
+
+        let viewMode: ActiveMode = mode == .translation ? .translation : .transcriptionTest
+        let sessionID = UUID()
+        activeSessionID = sessionID
+        activeMode = viewMode
+        status = mode == .translation ? "Starting translation" : "Starting transcription test"
+        lastError = nil
+        whisperDiagnostics = WhisperDiagnostics(
+            modelState: .loading,
+            modelID: settings.whisperModel
+        )
+
+        startTask = Task {
+            defer { clearStartTask(for: sessionID) }
+
             await save()
-            guard isCurrentTranslationSession(sessionID) else { return }
+            guard isCurrentSession(sessionID, mode: viewMode) else { return }
 
             await pipeline.start(
+                mode: mode,
                 onError: { [weak self, sessionID] message in
                     Task { @MainActor in
-                        guard self?.translationSessionID == sessionID else { return }
+                        guard self?.activeSessionID == sessionID else { return }
                         self?.lastError = message
                         self?.status = "Needs attention"
                     }
                 },
                 onAudioDiagnostics: { [weak self, sessionID] diagnostics in
                     Task { @MainActor in
-                        guard self?.translationSessionID == sessionID else { return }
+                        guard self?.activeSessionID == sessionID else { return }
                         self?.audioDiagnostics = diagnostics
+                    }
+                },
+                onTranscript: { _ in },
+                onWhisperDiagnostics: { [weak self, sessionID] diagnostics in
+                    await MainActor.run {
+                        guard self?.activeSessionID == sessionID else { return }
+                        self?.whisperDiagnostics = diagnostics
+                        if diagnostics.modelState == .loading {
+                            self?.status = "Loading Whisper model"
+                        }
                     }
                 }
             )
-            guard isCurrentTranslationSession(sessionID) else { return }
-            status = "Listening"
+            guard isCurrentSession(sessionID, mode: viewMode) else { return }
+            status = mode == .translation ? "Listening" : "Testing transcription"
         }
     }
 
-    func stop() {
-        guard isRunning || translationStartTask != nil else { return }
+    private func stopActiveMode(statusAfterStop: String) {
         Task {
-            await stopTranslationSession(statusAfterStop: "Stopped")
+            await finishActiveMode(statusAfterStop: statusAfterStop)
         }
     }
 
-    func startSoundTest() {
-        guard !isTestingSound, soundTestStartTask == nil else { return }
+    private func finishActiveMode(statusAfterStop: String?) async {
+        let mode = activeMode
+        activeSessionID = UUID()
+        activeMode = .idle
+        let pendingStartTask = startTask
+        startTask = nil
+        pendingStartTask?.cancel()
 
-        let sessionID = UUID()
-        soundTestSessionID = sessionID
-        soundTestStartTask = Task {
-            defer {
-                if soundTestSessionID == sessionID {
-                    soundTestStartTask = nil
-                }
-            }
-
-            await stopTranslationSession(statusAfterStop: nil)
-            guard isCurrentSoundTestSession(sessionID) else { return }
-
-            let audioEngine = ScreenCaptureAudioEngine()
-            soundTestEngine = audioEngine
-            isTestingSound = true
-            status = "Testing system audio"
-            lastError = nil
-            audioDiagnostics = AudioCaptureDiagnostics(state: .requestingPermission)
-
-            soundTestTask = Task { [weak self, audioEngine, sessionID] in
-                for await diagnostics in audioEngine.diagnostics {
-                    Task { @MainActor in
-                        guard self?.soundTestSessionID == sessionID else { return }
-                        self?.audioDiagnostics = diagnostics
-                    }
-                    if Task.isCancelled { return }
-                }
-            }
-
-            do {
-                try await audioEngine.start()
-                guard isCurrentSoundTestSession(sessionID) else {
-                    await audioEngine.stop()
-                    return
-                }
-                status = "Testing system audio"
-            } catch {
-                guard isCurrentSoundTestSession(sessionID) else { return }
-                lastError = error.localizedDescription
-                status = "Sound test needs attention"
-                await cleanupSoundTestSession(statusAfterStop: nil)
-            }
+        if mode == .soundTest {
+            await soundTestEngine?.stop()
+            soundDiagnosticsTask?.cancel()
+            soundDiagnosticsTask = nil
+            soundTestEngine = nil
+        } else if mode == .translation || mode == .transcriptionTest {
+            await pipeline.stop()
         }
-    }
 
-    func stopSoundTest() {
-        guard isTestingSound || soundTestStartTask != nil else { return }
-
-        Task {
-            await stopSoundTestSession(statusAfterStop: "Sound test stopped")
-        }
-    }
-
-    private func stopTranslationSession(statusAfterStop: String?) async {
-        guard isRunning || translationStartTask != nil else { return }
-
-        let startTask = translationStartTask
-        translationStartTask = nil
-        translationSessionID = UUID()
-        startTask?.cancel()
-        await startTask?.value
-        await pipeline.stop()
-        isRunning = false
         if let statusAfterStop {
             status = statusAfterStop
         }
     }
 
-    private func stopSoundTestSession(statusAfterStop: String?) async {
-        guard isTestingSound || soundTestStartTask != nil || soundTestEngine != nil || soundTestTask != nil else { return }
-
-        let startTask = soundTestStartTask
-        soundTestStartTask = nil
-        soundTestSessionID = UUID()
-        startTask?.cancel()
-        await startTask?.value
-        await cleanupSoundTestSession(statusAfterStop: statusAfterStop)
-    }
-
-    private func cleanupSoundTestSession(statusAfterStop: String?) async {
-        await soundTestEngine?.stop()
-        soundTestTask?.cancel()
-        soundTestTask = nil
-        soundTestEngine = nil
-        isTestingSound = false
-        if let statusAfterStop {
-            status = statusAfterStop
+    private func clearStartTask(for sessionID: UUID) {
+        if activeSessionID == sessionID {
+            startTask = nil
         }
     }
 
-    private func isCurrentTranslationSession(_ sessionID: UUID) -> Bool {
-        translationSessionID == sessionID && !Task.isCancelled
-    }
-
-    private func isCurrentSoundTestSession(_ sessionID: UUID) -> Bool {
-        soundTestSessionID == sessionID && !Task.isCancelled
+    private func isCurrentSession(_ sessionID: UUID, mode: ActiveMode) -> Bool {
+        activeSessionID == sessionID && activeMode == mode && !Task.isCancelled
     }
 }

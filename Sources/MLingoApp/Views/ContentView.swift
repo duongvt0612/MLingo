@@ -46,7 +46,7 @@ struct ContentView: View {
                     .frame(minWidth: 104)
             }
             .buttonStyle(.bordered)
-            .disabled(viewModel.isRunning)
+            .disabled(viewModel.isActive && !viewModel.isTestingSound)
             .accessibilityLabel(viewModel.isTestingSound ? "Stop sound test" : "Test system audio capture")
 
             Button {
@@ -57,7 +57,7 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.return, modifiers: [.command])
-            .disabled(viewModel.isTestingSound)
+            .disabled(viewModel.isActive && !viewModel.isRunning)
             .accessibilityLabel(viewModel.isRunning ? "Stop live translation" : "Start live translation")
         }
         .padding(.top, 14)
@@ -80,7 +80,7 @@ struct ContentView: View {
             HStack(alignment: .center, spacing: 12) {
                 Label(viewModel.status, systemImage: statusIconName)
                     .font(.title3.weight(.semibold))
-                    .symbolEffect(.pulse, options: reduceMotion ? .nonRepeating : .repeating, value: viewModel.isRunning || viewModel.isTestingSound)
+                    .symbolEffect(.pulse, options: reduceMotion ? .nonRepeating : .repeating, value: viewModel.isActive)
 
                 Spacer()
 
@@ -101,7 +101,7 @@ struct ContentView: View {
                     .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
                     .accessibilityLabel("Error: \(lastError)")
             } else {
-                Text(viewModel.isTestingSound ? "Testing audio capture only. Whisper and OpenAI are not used in this mode." : "Audio stays local. Only recognized text is sent to OpenAI for translation.")
+                Text(privacyDescription)
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -109,6 +109,10 @@ struct ContentView: View {
             readinessGrid
 
             audioDiagnosticsPanel
+
+            Divider()
+
+            transcriptionDiagnosticsPanel
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -119,13 +123,28 @@ struct ContentView: View {
         Grid(alignment: .leading, horizontalSpacing: 22, verticalSpacing: 10) {
             GridRow {
                 progressRow("System audio capture", isReady: isSystemAudioCaptureReady)
-                progressRow("Whisper boundary", isReady: true)
+                whisperModelStatusRow
             }
             GridRow {
                 progressRow("OpenAI API key", isReady: !viewModel.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 progressRow("Subtitle overlay", isReady: true)
             }
         }
+    }
+
+    private var whisperModelStatusRow: some View {
+        HStack(spacing: 7) {
+            if viewModel.whisperDiagnostics.modelState == .loading {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Loading Whisper model")
+            } else {
+                Image(systemName: viewModel.whisperDiagnostics.modelState == .ready ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    .foregroundStyle(viewModel.whisperDiagnostics.modelState == .ready ? .green : .orange)
+            }
+            Text("Whisper: \(viewModel.whisperDiagnostics.modelState.displayName)")
+        }
+        .font(.callout)
     }
 
     private var audioDiagnosticsPanel: some View {
@@ -166,6 +185,77 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var transcriptionDiagnosticsPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Label("Transcription diagnostics", systemImage: "captions.bubble")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    viewModel.isTestingTranscription
+                        ? viewModel.stopTranscriptionTest()
+                        : viewModel.startTranscriptionTest()
+                } label: {
+                    Label(
+                        viewModel.isTestingTranscription ? "Stop Test" : "Test Transcription",
+                        systemImage: viewModel.isTestingTranscription ? "stop.fill" : "text.bubble"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .disabled(viewModel.isActive && !viewModel.isTestingTranscription)
+                .accessibilityLabel(
+                    viewModel.isTestingTranscription
+                        ? "Stop transcription test"
+                        : "Start transcription test"
+                )
+            }
+
+            if viewModel.whisperDiagnostics.modelState == .loading {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Downloading or loading model…")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.callout)
+                .accessibilityElement(children: .combine)
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                diagnosticMetric("Model state", viewModel.whisperDiagnostics.modelState.displayName)
+                diagnosticMetric("Window", "\(Int(viewModel.whisperDiagnostics.windowDuration * 1000)) ms")
+                diagnosticMetric("Latency", "\(Int(viewModel.whisperDiagnostics.inferenceLatency * 1000)) ms")
+                diagnosticMetric("Processed", "\(viewModel.whisperDiagnostics.processedWindowCount)")
+                diagnosticMetric("Duplicates", "\(viewModel.whisperDiagnostics.suppressedDuplicateCount)")
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Model ID")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(viewModel.whisperDiagnostics.modelID.isEmpty ? viewModel.settings.whisperModel : viewModel.whisperDiagnostics.modelID)
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Last transcript")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(viewModel.whisperDiagnostics.lastTranscript.isEmpty ? "No transcript yet" : viewModel.whisperDiagnostics.lastTranscript)
+                    .font(.callout)
+                    .foregroundStyle(viewModel.whisperDiagnostics.lastTranscript.isEmpty ? .secondary : .primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     private var settingsSummary: some View {
         VStack(alignment: .leading, spacing: 20) {
             summarySection("Translation") {
@@ -196,7 +286,7 @@ struct ContentView: View {
     }
 
     private var statusIconName: String {
-        if viewModel.isRunning || viewModel.isTestingSound {
+        if viewModel.isActive {
             return "waveform"
         }
         if viewModel.lastError != nil {
@@ -206,13 +296,27 @@ struct ContentView: View {
     }
 
     private var modeLabel: String {
-        if viewModel.isTestingSound {
-            return "Sound test"
+        switch viewModel.activeMode {
+        case .idle:
+            "Idle"
+        case .soundTest:
+            "Sound test"
+        case .transcriptionTest:
+            "Transcription test"
+        case .translation:
+            "Translation"
         }
-        if viewModel.isRunning {
-            return "Translation"
+    }
+
+    private var privacyDescription: String {
+        switch viewModel.activeMode {
+        case .soundTest:
+            "Testing audio capture only. Whisper and OpenAI are not used in this mode."
+        case .transcriptionTest:
+            "Audio and transcription stay on this Mac. OpenAI and the subtitle overlay are not used."
+        default:
+            "Audio stays local. Only recognized text is sent to OpenAI for translation."
         }
-        return "Idle"
     }
 
     private func levelBar(_ title: String, value: Double, scale: Double) -> some View {
@@ -278,6 +382,21 @@ private extension AudioCaptureState {
             "Running"
         case .stopped:
             "Stopped"
+        case .failed:
+            "Failed"
+        }
+    }
+}
+
+private extension WhisperModelState {
+    var displayName: String {
+        switch self {
+        case .idle:
+            "Idle"
+        case .loading:
+            "Loading"
+        case .ready:
+            "Ready"
         case .failed:
             "Failed"
         }
