@@ -107,6 +107,41 @@ func mlxMetalLibraryAvailabilityFindsXcodeResourceBundle() throws {
     #expect(MLXMetalLibraryAvailability.isAvailable(searchRoots: [root]))
 }
 
+@Test
+func mlxMetalLibraryAvailabilityRejectsSwiftPMCommandLineBuildWithoutLibrary() {
+    guard ProcessInfo.processInfo.arguments.first?.contains("/.build/") == true else {
+        return
+    }
+
+    #expect(MLXMetalLibraryAvailability.isAvailable() == false)
+}
+
+@Test
+func mlxMetalLibraryAvailabilityRejectsSwiftPMExecutableBeforeBundleSearch() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "MLingo-Metal-\(UUID().uuidString)", directoryHint: .isDirectory)
+    let resourceDirectory = root
+        .appending(path: "mlx-swift_Cmlx.bundle", directoryHint: .isDirectory)
+        .appending(path: "Contents/Resources", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: resourceDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    #expect(
+        FileManager.default.createFile(
+            atPath: resourceDirectory.appending(path: "default.metallib").path,
+            contents: Data([0])
+        )
+    )
+
+    let swiftPMExecutable = root
+        .appending(path: ".build/arm64-apple-macosx/debug/MLingo")
+    #expect(
+        MLXMetalLibraryAvailability.isAvailable(
+            executableURL: swiftPMExecutable,
+            searchRoots: [root]
+        ) == false
+    )
+}
+
 private actor StubWhisperBackend: WhisperInferenceBackend {
     private var transcripts: [String]
     private(set) var loadedModelNames: [String] = []
