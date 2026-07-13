@@ -8,12 +8,16 @@ final class MLingoViewModel {
     var settings: AppSettings
     var apiKey: String = ""
     var isRunning = false
+    var isTestingSound = false
     var status = "Ready"
     var lastError: String?
+    var audioDiagnostics = AudioCaptureDiagnostics()
 
     private let settingsStore: SettingsStoreProtocol
     private let apiKeyStore: APIKeyStoreProtocol
     private let pipeline: SubtitlePipeline
+    private var soundTestEngine: (any AudioEngineProtocol)?
+    private var soundTestTask: Task<Void, Never>?
 
     init(
         settings: AppSettings,
@@ -74,18 +78,27 @@ final class MLingoViewModel {
 
     func start() {
         guard !isRunning else { return }
-        isRunning = true
-        status = "Starting capture"
-        lastError = nil
 
         Task {
+            await stopSoundTestSession(statusAfterStop: nil)
+
+            isRunning = true
+            status = "Starting translation"
+            lastError = nil
             await save()
-            await pipeline.start { [weak self] message in
-                Task { @MainActor in
-                    self?.lastError = message
-                    self?.status = "Needs attention"
+            await pipeline.start(
+                onError: { [weak self] message in
+                    Task { @MainActor in
+                        self?.lastError = message
+                        self?.status = "Needs attention"
+                    }
+                },
+                onAudioDiagnostics: { [weak self] diagnostics in
+                    Task { @MainActor in
+                        self?.audioDiagnostics = diagnostics
+                    }
                 }
-            }
+            )
             status = "Listening"
         }
     }
@@ -93,9 +106,71 @@ final class MLingoViewModel {
     func stop() {
         guard isRunning else { return }
         Task {
-            await pipeline.stop()
-            isRunning = false
-            status = "Stopped"
+            await stopTranslationSession(statusAfterStop: "Stopped")
+        }
+    }
+
+    func startSoundTest() {
+        guard !isTestingSound else { return }
+
+        Task {
+            await stopTranslationSession(statusAfterStop: nil)
+
+            let audioEngine = ScreenCaptureAudioEngine()
+            soundTestEngine = audioEngine
+            isTestingSound = true
+            status = "Testing system audio"
+            lastError = nil
+            audioDiagnostics = AudioCaptureDiagnostics(state: .requestingPermission)
+
+            soundTestTask = Task { [weak self, audioEngine] in
+                for await diagnostics in audioEngine.diagnostics {
+                    if Task.isCancelled { return }
+                    Task { @MainActor in
+                        self?.audioDiagnostics = diagnostics
+                    }
+                }
+            }
+
+            do {
+                try await audioEngine.start()
+                status = "Testing system audio"
+            } catch {
+                lastError = error.localizedDescription
+                status = "Sound test needs attention"
+                await stopSoundTestSession(statusAfterStop: nil)
+            }
+        }
+    }
+
+    func stopSoundTest() {
+        guard isTestingSound else { return }
+
+        Task {
+            await stopSoundTestSession(statusAfterStop: "Sound test stopped")
+        }
+    }
+
+    private func stopTranslationSession(statusAfterStop: String?) async {
+        guard isRunning else { return }
+
+        await pipeline.stop()
+        isRunning = false
+        if let statusAfterStop {
+            status = statusAfterStop
+        }
+    }
+
+    private func stopSoundTestSession(statusAfterStop: String?) async {
+        guard isTestingSound || soundTestEngine != nil || soundTestTask != nil else { return }
+
+        soundTestTask?.cancel()
+        soundTestTask = nil
+        await soundTestEngine?.stop()
+        soundTestEngine = nil
+        isTestingSound = false
+        if let statusAfterStop {
+            status = statusAfterStop
         }
     }
 }
