@@ -27,7 +27,7 @@ actor MLXAudioWhisperBackend: WhisperInferenceBackend {
     func loadModel(named modelName: String) async throws {
         guard isMetalLibraryAvailable() else {
             throw MLingoError.whisperModelLoadFailed(
-                "MLX Metal shaders are missing from this build. `swift run` does not package mlx-swift Metal resources. Install the Metal Toolchain and run the MLingo-Package scheme in Xcode."
+                "MLX Metal shaders are missing from this build. `swift run` does not package mlx-swift Metal resources. Install the Metal Toolchain and run the MLingo scheme in Xcode."
             )
         }
 

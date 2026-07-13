@@ -27,7 +27,7 @@ Audio samples chỉ đi từ ScreenCaptureKit đến MLX Whisper trong process c
 
 Hai ID do MLingo quản lý (`whisper-base-mlx` và `whisper-small-mlx`) hiện trỏ tới repository legacy chỉ có `weights.npz`, trong khi loader 0.1.3 nhận `safetensors`. Backend resolve chúng sang mirror F16 tương ứng (`*-asr-fp16`, khoảng 144 MB cho base) lúc load. Giá trị settings và custom model ID không bị rewrite.
 
-Binary tạo bởi `swift run` không chứa Metal resource của `mlx-swift`. Backend kiểm tra resource trước khi tải model và trả lỗi có hướng dẫn, tránh để MLX C++ abort sau khi download. Manual transcription/GPU phải chạy bằng scheme `MLingo-Package` trong Xcode.
+Binary tạo bởi `swift run` không chứa Metal resource của `mlx-swift`. Backend kiểm tra resource trước khi tải model và trả lỗi có hướng dẫn, tránh để MLX C++ abort sau khi download. Manual transcription phải chạy bằng scheme `MLingo`; GPU integration test dùng scheme `MLingo-Package` trong Xcode.
 
 ## Test
 
