@@ -34,6 +34,7 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
     private var sampleRate: Double = 16_000
     private var channelCount = 1
     private var startTimestamp: TimeInterval = 0
+    private var retainedOverlapSampleCount = 0
 
     init(configuration: AdaptiveAudioWindowConfiguration = .init()) {
         self.configuration = configuration
@@ -77,6 +78,7 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
             let retainedStartIndex = max(maximumSampleCount - overlapSampleCount, 0)
             samples.removeFirst(retainedStartIndex)
             startTimestamp += Double(retainedStartIndex) / sampleRate
+            retainedOverlapSampleCount = min(overlapSampleCount, samples.count)
         }
 
         return windows
@@ -84,7 +86,9 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
 
     mutating func flushForSilence() -> AudioChunk? {
         defer { reset() }
-        guard bufferedDuration >= configuration.minimumSpeechDuration else {
+        let newSpeechSampleCount = samples.count - retainedOverlapSampleCount
+        let newSpeechDuration = Double(newSpeechSampleCount) / sampleRate
+        guard newSpeechDuration >= configuration.minimumSpeechDuration else {
             return nil
         }
 
@@ -94,6 +98,7 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
     mutating func reset() {
         samples.removeAll(keepingCapacity: true)
         startTimestamp = 0
+        retainedOverlapSampleCount = 0
     }
 
     private func makeChunk(samples: [Float], timestamp: TimeInterval) -> AudioChunk {
