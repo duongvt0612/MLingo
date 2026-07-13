@@ -1,0 +1,71 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+Package.pins
+
+# Xcode
+DerivedData/
+build/
+*.xcuserstate
+*.xccheckout
+*.moved-aside
+*.xcscmblueprint
+*.hmap
+
+# Keep shared project/workspace files trackable, ignore only user-local state.
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+
+# Swift/Xcode generated reports and archives
+*.xcresult
+*.ipa
+*.dSYM.zip
+*.dSYM
+*.app.dSYM
+
+# App/package outputs
+*.app
+*.pkg
+*.dmg
+
+# Playgrounds
+timeline.xctimeline
+playground.xcworkspace/
+
+# Dependency managers that may be introduced later
+Carthage/Build/
+Pods/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.p8
+*.p12
+*.mobileprovision
+*.provisionprofile
+
+# Logs
+*.log
+logs/
+
+# Editor and local tooling
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+tmp/
+temp/
+*.tmp
