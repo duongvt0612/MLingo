@@ -9,6 +9,7 @@ public final class SubtitlePipeline {
     private let settingsStore: SettingsStoreProtocol
 
     private var task: Task<Void, Never>?
+    private var diagnosticsTask: Task<Void, Never>?
     private var queue = OrderedSubtitleQueue()
 
     public init(
@@ -25,7 +26,10 @@ public final class SubtitlePipeline {
         self.settingsStore = settingsStore
     }
 
-    public func start(onError: @escaping @Sendable (String) -> Void) async {
+    public func start(
+        onError: @escaping @Sendable (String) -> Void,
+        onAudioDiagnostics: (@Sendable (AudioCaptureDiagnostics) -> Void)? = nil
+    ) async {
         MLingoLogger.pipeline.info("Starting subtitle pipeline")
         await stop()
 
@@ -35,6 +39,15 @@ public final class SubtitlePipeline {
             try await audioEngine.start()
             overlayEngine.show()
             MLingoLogger.pipeline.info("Subtitle pipeline started")
+
+            if let onAudioDiagnostics {
+                diagnosticsTask = Task { [audioEngine] in
+                    for await diagnostics in audioEngine.diagnostics {
+                        if Task.isCancelled { return }
+                        onAudioDiagnostics(diagnostics)
+                    }
+                }
+            }
 
             task = Task { [audioEngine, whisperEngine, translationEngine, settingsStore, overlayEngine] in
                 var queue = OrderedSubtitleQueue()
@@ -72,8 +85,10 @@ public final class SubtitlePipeline {
         MLingoLogger.pipeline.info("Stopping subtitle pipeline")
         task?.cancel()
         task = nil
-        queue = OrderedSubtitleQueue()
         await audioEngine.stop()
+        diagnosticsTask?.cancel()
+        diagnosticsTask = nil
+        queue = OrderedSubtitleQueue()
         overlayEngine.hide()
         MLingoLogger.pipeline.info("Subtitle pipeline stopped")
     }
