@@ -5,26 +5,9 @@ import Testing
 
 @Test
 func mlxWhisperTranscribesJFKFixture() async throws {
-    guard ProcessInfo.processInfo.environment["MLINGO_RUN_MLX_INTEGRATION"] == "1" else {
+    guard shouldRunMLXIntegration else {
         return
     }
-
-    let cacheURL = FileManager.default.temporaryDirectory
-        .appending(path: "MLingo-Whisper-\(UUID().uuidString)", directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: cacheURL, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: cacheURL) }
-
-    let previousCachePath = ProcessInfo.processInfo.environment["HF_HUB_CACHE"]
-    setenv("HF_HUB_CACHE", cacheURL.path, 1)
-    defer {
-        if let previousCachePath {
-            setenv("HF_HUB_CACHE", previousCachePath, 1)
-        } else {
-            unsetenv("HF_HUB_CACHE")
-        }
-    }
-
-    #expect(try FileManager.default.contentsOfDirectory(atPath: cacheURL.path).isEmpty)
 
     let fixtureURL = try #require(
         Bundle.module.url(
@@ -37,16 +20,51 @@ func mlxWhisperTranscribesJFKFixture() async throws {
     let engine = MLXWhisperEngine()
     try await engine.loadModel(named: "mlx-community/whisper-base-mlx")
 
+    let transcript = try await engine.transcribe(chunk, language: "English")
+    let text = try #require(transcript?.text.lowercased())
+
+    #expect(text.contains("ask not what your country can do for you"))
+}
+
+@Test
+func mlxWhisperLoadsDefaultModelFromEmptyCache() async throws {
+    guard shouldRunMLXDownloadIntegration else {
+        return
+    }
+
+    let cacheURL = FileManager.default.temporaryDirectory
+        .appending(path: "MLingo-Whisper-\(UUID().uuidString)", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: cacheURL, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: cacheURL) }
+
+    #expect(try FileManager.default.contentsOfDirectory(atPath: cacheURL.path).isEmpty)
+
+    let engine = MLXWhisperEngine(
+        backend: MLXAudioWhisperBackend(cacheDirectory: cacheURL)
+    )
+    try await engine.loadModel(named: "mlx-community/whisper-base-mlx")
+
     let cachedFiles = FileManager.default.enumerator(
         at: cacheURL,
         includingPropertiesForKeys: nil
     )?.compactMap { $0 as? URL } ?? []
     #expect(cachedFiles.contains { $0.pathExtension == "safetensors" })
+}
 
-    let transcript = try await engine.transcribe(chunk, language: "English")
-    let text = try #require(transcript?.text.lowercased())
+private var shouldRunMLXIntegration: Bool {
+    #if MLINGO_RUN_MLX_INTEGRATION
+        true
+    #else
+        ProcessInfo.processInfo.environment["MLINGO_RUN_MLX_INTEGRATION"] == "1"
+    #endif
+}
 
-    #expect(text.contains("ask not what your country can do for you"))
+private var shouldRunMLXDownloadIntegration: Bool {
+    #if MLINGO_RUN_MLX_DOWNLOAD_INTEGRATION
+        true
+    #else
+        ProcessInfo.processInfo.environment["MLINGO_RUN_MLX_DOWNLOAD_INTEGRATION"] == "1"
+    #endif
 }
 
 private func loadMonoAudioFixture(from url: URL) throws -> AudioChunk {

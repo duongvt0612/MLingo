@@ -339,21 +339,26 @@ Run the offline unit suite:
 swift test
 ```
 
-Run the opt-in native MLX fixture test (uses an empty temporary cache and downloads the model on each run):
+Run the opt-in native MLX fixture test. It uses the normal Hugging Face cache and downloads the model only when it is missing:
 
 ```bash
 MLINGO_RUN_MLX_INTEGRATION=1 swift test --filter MLXWhisperIntegrationTests
 ```
 
-The command-line SwiftPM builder cannot compile MLX Metal shaders. For GPU inference, build the package directly with Xcode (no generated Xcode project is required) and ensure the Metal Toolchain component is installed:
+This CLI form requires `default.metallib` to already be present beside the test products. On a clean machine, use the Xcode command below so the shader bundle is built and packaged automatically.
+
+The command-line SwiftPM builder cannot compile MLX Metal shaders. For GPU inference, build the package directly with Xcode (no generated Xcode project is required) and ensure the Metal Toolchain component is installed. The compilation condition is required because shell environment variables are not forwarded into Xcode's test process:
 
 ```bash
-MLINGO_RUN_MLX_INTEGRATION=1 xcodebuild test \
+xcodebuild test \
   -scheme MLingo-Package \
   -destination 'platform=macOS,arch=arm64' \
   -only-testing:MLingoCoreTests \
-  -skipPackagePluginValidation
+  -skipPackagePluginValidation \
+  OTHER_SWIFT_FLAGS='$(inherited) -DMLINGO_RUN_MLX_INTEGRATION'
 ```
+
+To force a separate download/load check from an empty temporary cache, replace the compilation condition with `-DMLINGO_RUN_MLX_DOWNLOAD_INTEGRATION`.
 
 Total
 

@@ -1,4 +1,5 @@
 import Foundation
+import HuggingFace
 import MLX
 import MLXAudioCore
 import MLXAudioSTT
@@ -10,13 +11,16 @@ protocol WhisperInferenceBackend: Sendable {
 
 actor MLXAudioWhisperBackend: WhisperInferenceBackend {
     private let isMetalLibraryAvailable: @Sendable () -> Bool
+    private let cache: HubCache
     private var model: WhisperModel?
 
     init(
+        cacheDirectory: URL? = nil,
         isMetalLibraryAvailable: @escaping @Sendable () -> Bool = {
             MLXMetalLibraryAvailability.isAvailable()
         }
     ) {
+        cache = cacheDirectory.map(HubCache.init(cacheDirectory:)) ?? .default
         self.isMetalLibraryAvailable = isMetalLibraryAvailable
     }
 
@@ -28,7 +32,8 @@ actor MLXAudioWhisperBackend: WhisperInferenceBackend {
         }
 
         model = try await WhisperModel.fromPretrained(
-            Self.resolvedModelName(for: modelName)
+            Self.resolvedModelName(for: modelName),
+            cache: cache
         )
     }
 
@@ -87,7 +92,7 @@ public actor MLXWhisperEngine: WhisperEngineProtocol {
             throw CancellationError()
         } catch {
             throw MLingoError.whisperModelLoadFailed(
-                "Could not load Whisper model \(normalizedName). Check the model ID and network connection. \(error.localizedDescription)"
+                "Could not load Whisper model \(normalizedName). Check the model ID and network connection. \(String(describing: error))"
             )
         }
     }

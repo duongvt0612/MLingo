@@ -52,14 +52,17 @@ xcodebuild -downloadComponent MetalToolchain
 Sau đó dùng Xcode trực tiếp với `Package.swift` (không cần tạo `.xcodeproj`):
 
 ```bash
-MLINGO_RUN_MLX_INTEGRATION=1 xcodebuild test \
+xcodebuild test \
   -scheme MLingo-Package \
   -destination 'platform=macOS,arch=arm64' \
   -only-testing:MLingoCoreTests \
-  -skipPackagePluginValidation
+  -skipPackagePluginValidation \
+  OTHER_SWIFT_FLAGS='$(inherited) -DMLINGO_RUN_MLX_INTEGRATION'
 ```
 
-Scheme `MLingo-Package` tự compile shader từ source của dependency và tạo `mlx-swift_Cmlx.bundle/default.metallib` trong build products cạnh test bundle; không cần copy artifact thủ công hoặc dựa vào một `.metallib` có sẵn. Test integration dùng một Hugging Face cache tạm trống, nên lần chạy opt-in này xác nhận cả download, load và inference của model được backend resolve.
+Scheme `MLingo-Package` tự compile shader từ source của dependency và tạo `mlx-swift_Cmlx.bundle/default.metallib` trong build products cạnh test bundle; không cần copy artifact thủ công hoặc dựa vào một `.metallib` có sẵn. Compilation condition bật test opt-in bên trong Xcode test process; prefix biến môi trường trước `xcodebuild` không được test runner kế thừa. Test GPU integration dùng Hugging Face cache bình thường để xác nhận load và inference mà không bắt buộc download lại model đã có.
+
+Test download/load từ cache tạm trống được gate riêng để không download lại model khi chỉ nghiệm thu GPU inference. Chạy cùng command trên nhưng đổi compilation condition thành `-DMLINGO_RUN_MLX_DOWNLOAD_INTEGRATION`.
 
 Kết quả được chấp nhận khi transcript, không phụ thuộc dấu câu, chứa:
 
@@ -76,7 +79,7 @@ ask not what your country can do for you
 - [ ] Lỗi mạng/model hiển thị rõ và có thể thử lại.
 - [ ] Sau warm-up trên M4 Pro, benchmark ít nhất 10 window: median ≤ 1.200 ms, p95 ≤ 2.000 ms; không tính model load.
 
-Verification trên máy phát triển hiện tại đã tải và validate model F16 thành công, nhưng GPU integration còn chặn ở môi trường vì Xcode chưa cài Metal Toolchain. Offline suite không bị ảnh hưởng.
+Verification trên máy phát triển hiện tại đã cài Metal Toolchain, load model F16 từ cache và chạy GPU integration với fixture JFK thành công. Test download từ cache trống vẫn phụ thuộc khả năng truy cập Hugging Face/Xet CDN tại thời điểm chạy.
 
 ## Ghi chú dependency
 
