@@ -6,7 +6,7 @@ Thay `MLXWhisperEngine` placeholder bằng inference native Swift trên Apple Si
 
 ## Trạng thái triển khai
 
-- [x] Swift tools 6.2; pin chính xác `mlx-audio-swift` 0.1.3.
+- [x] Swift tools 6.3, phù hợp với `mlx-swift` 0.31.6 đã resolve; pin chính xác `mlx-audio-swift` 0.1.3.
 - [x] Chỉ liên kết `MLXAudioCore` và `MLXAudioSTT` vào `MLingoCore`.
 - [x] `MLXWhisperEngine` là actor, dùng `WhisperModel.fromPretrained` và cache model đang load.
 - [x] Model mặc định `mlx-community/whisper-base-mlx`.
@@ -32,26 +32,32 @@ Hai ID do MLingo quản lý (`whisper-base-mlx` và `whisper-small-mlx`) hiện 
 Test mặc định không tải model:
 
 ```bash
-rtk proxy swift test
+swift test
 ```
 
 Test MLX thật với fixture JFK được gate bằng biến môi trường:
 
 ```bash
-rtk proxy env MLINGO_RUN_MLX_INTEGRATION=1 swift test --filter MLXWhisperIntegrationTests
+MLINGO_RUN_MLX_INTEGRATION=1 swift test --filter MLXWhisperIntegrationTests
 ```
 
-`mlx-swift` xác nhận SwiftPM command-line không build được Metal shaders. Command trên chỉ chạy được nếu `mlx.metallib` đã được cung cấp cạnh test binary. Cách chuẩn, vẫn dùng trực tiếp `Package.swift` và không cần tạo `.xcodeproj`, là:
+`mlx-swift` xác nhận SwiftPM command-line không tự build Metal shaders. Command trên chỉ chạy GPU inference nếu bundle chứa `default.metallib` đã có trong build products. Trên máy sạch, cài Metal Toolchain trước:
 
 ```bash
-rtk proxy env MLINGO_RUN_MLX_INTEGRATION=1 xcodebuild test \
+xcodebuild -downloadComponent MetalToolchain
+```
+
+Sau đó dùng Xcode trực tiếp với `Package.swift` (không cần tạo `.xcodeproj`):
+
+```bash
+MLINGO_RUN_MLX_INTEGRATION=1 xcodebuild test \
   -scheme MLingo-Package \
   -destination 'platform=macOS,arch=arm64' \
   -only-testing:MLingoCoreTests \
   -skipPackagePluginValidation
 ```
 
-Xcode phải cài Metal Toolchain trong Settings → Components (hoặc qua `xcodebuild -downloadComponent MetalToolchain`).
+Scheme `MLingo-Package` tự compile shader từ source của dependency và tạo `mlx-swift_Cmlx.bundle/default.metallib` trong build products cạnh test bundle; không cần copy artifact thủ công hoặc dựa vào một `.metallib` có sẵn. Test integration dùng một Hugging Face cache tạm trống, nên lần chạy opt-in này xác nhận cả download, load và inference của model được backend resolve.
 
 Kết quả được chấp nhận khi transcript, không phụ thuộc dấu câu, chứa:
 

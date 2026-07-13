@@ -75,13 +75,23 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
             let windowSamples = Array(samples.prefix(maximumSampleCount))
             windows.append(makeChunk(samples: windowSamples, timestamp: startTimestamp))
 
-            let retainedStartIndex = max(maximumSampleCount - overlapSampleCount, 0)
+            let retainedStartIndex = Self.retainedStartIndex(
+                maximumSampleCount: maximumSampleCount,
+                overlapSampleCount: overlapSampleCount
+            )
             samples.removeFirst(retainedStartIndex)
             startTimestamp += Double(retainedStartIndex) / sampleRate
             retainedOverlapSampleCount = min(overlapSampleCount, samples.count)
         }
 
         return windows
+    }
+
+    static func retainedStartIndex(
+        maximumSampleCount: Int,
+        overlapSampleCount: Int
+    ) -> Int {
+        max(maximumSampleCount - overlapSampleCount, 1)
     }
 
     mutating func flushForSilence() -> AudioChunk? {

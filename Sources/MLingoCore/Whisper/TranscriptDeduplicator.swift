@@ -19,7 +19,11 @@ struct TranscriptDeduplicator: Sendable {
         }
 
         let rawTokens = trimmedText.split(whereSeparator: \ .isWhitespace).map(String.init)
-        let normalizedTokens = rawTokens.map(Self.normalize).filter { !$0.isEmpty }
+        let indexedNormalizedTokens = rawTokens.enumerated().compactMap { index, token in
+            let normalizedToken = Self.normalize(token)
+            return normalizedToken.isEmpty ? nil : (rawIndex: index, token: normalizedToken)
+        }
+        let normalizedTokens = indexedNormalizedTokens.map(\.token)
 
         if let previousNormalizedText,
            Self.similarity(previousNormalizedText, normalizedText) >= similarityThreshold {
@@ -35,12 +39,15 @@ struct TranscriptDeduplicator: Sendable {
         previousNormalizedText = normalizedText
         previousTokens = normalizedTokens
 
-        guard overlapCount < rawTokens.count else {
+        let rawOverlapCount = overlapCount > 0
+            ? indexedNormalizedTokens[overlapCount - 1].rawIndex + 1
+            : 0
+        guard rawOverlapCount < rawTokens.count else {
             suppressedCount += 1
             return nil
         }
 
-        let newText = rawTokens.dropFirst(overlapCount).joined(separator: " ")
+        let newText = rawTokens.dropFirst(rawOverlapCount).joined(separator: " ")
         guard !newText.isEmpty else {
             suppressedCount += 1
             return nil

@@ -160,9 +160,10 @@ final class MLingoViewModel {
 
         let viewMode: ActiveMode = mode == .translation ? .translation : .transcriptionTest
         let sessionID = UUID()
+        let startingStatus = mode == .translation ? "Starting translation" : "Starting transcription test"
         activeSessionID = sessionID
         activeMode = viewMode
-        status = mode == .translation ? "Starting translation" : "Starting transcription test"
+        status = startingStatus
         lastError = nil
         whisperDiagnostics = WhisperDiagnostics(
             modelState: .loading,
@@ -174,6 +175,7 @@ final class MLingoViewModel {
 
             await save()
             guard isCurrentSession(sessionID, mode: viewMode) else { return }
+            status = startingStatus
 
             await pipeline.start(
                 mode: mode,

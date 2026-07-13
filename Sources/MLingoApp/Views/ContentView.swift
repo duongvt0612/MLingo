@@ -132,19 +132,30 @@ struct ContentView: View {
         }
     }
 
+    @ViewBuilder
     private var whisperModelStatusRow: some View {
-        HStack(spacing: 7) {
-            if viewModel.whisperDiagnostics.modelState == .loading {
-                ProgressView()
-                    .controlSize(.small)
-                    .accessibilityLabel("Loading Whisper model")
-            } else {
-                Image(systemName: viewModel.whisperDiagnostics.modelState == .ready ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                    .foregroundStyle(viewModel.whisperDiagnostics.modelState == .ready ? .green : .orange)
+        Group {
+            switch viewModel.whisperDiagnostics.modelState {
+            case .loading:
+                Label {
+                    Text("Whisper: Loading")
+                } icon: {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            case .ready:
+                Label("Whisper: Ready", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            case .idle:
+                Label("Whisper: Idle", systemImage: "circle")
+                    .foregroundStyle(.secondary)
+            case .failed:
+                Label("Whisper: Failed", systemImage: "exclamationmark.circle.fill")
+                    .foregroundStyle(.orange)
             }
-            Text("Whisper: \(viewModel.whisperDiagnostics.modelState.displayName)")
         }
         .font(.callout)
+        .accessibilityElement(children: .combine)
     }
 
     private var audioDiagnosticsPanel: some View {

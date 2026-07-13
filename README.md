@@ -42,7 +42,7 @@ Only text is sent to the translation API.
 
 Language
 
-- Swift 6.2
+- Swift 6.3
 
 UI
 
@@ -327,19 +327,19 @@ The default local Whisper model is `mlx-community/whisper-base-mlx`. Model artif
 Run the offline unit suite:
 
 ```bash
-rtk proxy swift test
+swift test
 ```
 
-Run the opt-in native MLX fixture test (downloads the model if it is not cached):
+Run the opt-in native MLX fixture test (uses an empty temporary cache and downloads the model on each run):
 
 ```bash
-rtk proxy env MLINGO_RUN_MLX_INTEGRATION=1 swift test --filter MLXWhisperIntegrationTests
+MLINGO_RUN_MLX_INTEGRATION=1 swift test --filter MLXWhisperIntegrationTests
 ```
 
 The command-line SwiftPM builder cannot compile MLX Metal shaders. For GPU inference, build the package directly with Xcode (no generated Xcode project is required) and ensure the Metal Toolchain component is installed:
 
 ```bash
-rtk proxy env MLINGO_RUN_MLX_INTEGRATION=1 xcodebuild test \
+MLINGO_RUN_MLX_INTEGRATION=1 xcodebuild test \
   -scheme MLingo-Package \
   -destination 'platform=macOS,arch=arm64' \
   -only-testing:MLingoCoreTests \
