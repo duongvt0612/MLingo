@@ -17,7 +17,22 @@ enum MLXMetalLibraryAvailability {
             }
         }
 
-        return isAvailable(searchRoots: searchRoots)
+        return isAvailable(
+            executableURL: Bundle.main.executableURL,
+            searchRoots: searchRoots
+        )
+    }
+
+    static func isAvailable(
+        executableURL: URL?,
+        searchRoots: [URL],
+        fileManager: FileManager = .default
+    ) -> Bool {
+        guard !isSwiftPMCommandLineExecutable(executableURL) else {
+            return false
+        }
+
+        return isAvailable(searchRoots: searchRoots, fileManager: fileManager)
     }
 
     static func isAvailable(
@@ -40,5 +55,9 @@ enum MLXMetalLibraryAvailability {
                 )
             }
         }
+    }
+
+    private static func isSwiftPMCommandLineExecutable(_ executableURL: URL?) -> Bool {
+        executableURL?.standardizedFileURL.pathComponents.contains(".build") == true
     }
 }
