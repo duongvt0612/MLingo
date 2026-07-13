@@ -43,6 +43,16 @@ func adaptiveWindowFlushesAtHardLimitAndRetainsOverlap() throws {
 }
 
 @Test
+func adaptiveWindowAlwaysAdvancesWhenRoundedOverlapFillsWindow() {
+    #expect(
+        AdaptiveAudioWindowAccumulator.retainedStartIndex(
+            maximumSampleCount: 1,
+            overlapSampleCount: 1
+        ) == 1
+    )
+}
+
+@Test
 func transcriptDeduplicatorRejectsEmptyExactAndNearDuplicates() throws {
     var deduplicator = TranscriptDeduplicator()
 
@@ -67,6 +77,20 @@ func transcriptDeduplicatorTrimsWindowOverlap() throws {
     let next = try #require(processedNext)
 
     #expect(next.text == "today we discuss Swift")
+    #expect(next.timestamp == 2)
+}
+
+@Test
+func transcriptDeduplicatorMapsNormalizedOverlapBackToRawTokens() throws {
+    var deduplicator = TranscriptDeduplicator()
+    _ = deduplicator.process(Transcript(text: "Welcome to the live stream", timestamp: 1))
+
+    let processedNext = deduplicator.process(
+        Transcript(text: "the ... live stream — today", timestamp: 2)
+    )
+    let next = try #require(processedNext)
+
+    #expect(next.text == "— today")
     #expect(next.timestamp == 2)
 }
 

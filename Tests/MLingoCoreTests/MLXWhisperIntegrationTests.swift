@@ -9,6 +9,23 @@ func mlxWhisperTranscribesJFKFixture() async throws {
         return
     }
 
+    let cacheURL = FileManager.default.temporaryDirectory
+        .appending(path: "MLingo-Whisper-\(UUID().uuidString)", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: cacheURL, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: cacheURL) }
+
+    let previousCachePath = ProcessInfo.processInfo.environment["HF_HUB_CACHE"]
+    setenv("HF_HUB_CACHE", cacheURL.path, 1)
+    defer {
+        if let previousCachePath {
+            setenv("HF_HUB_CACHE", previousCachePath, 1)
+        } else {
+            unsetenv("HF_HUB_CACHE")
+        }
+    }
+
+    #expect(try FileManager.default.contentsOfDirectory(atPath: cacheURL.path).isEmpty)
+
     let fixtureURL = try #require(
         Bundle.module.url(
             forResource: "jfk",
@@ -19,6 +36,13 @@ func mlxWhisperTranscribesJFKFixture() async throws {
     let chunk = try loadMonoAudioFixture(from: fixtureURL)
     let engine = MLXWhisperEngine()
     try await engine.loadModel(named: "mlx-community/whisper-base-mlx")
+
+    let cachedFiles = FileManager.default.enumerator(
+        at: cacheURL,
+        includingPropertiesForKeys: nil
+    )?.compactMap { $0 as? URL } ?? []
+    #expect(cachedFiles.contains { $0.pathExtension == "safetensors" })
+
     let transcript = try await engine.transcribe(chunk, language: "English")
     let text = try #require(transcript?.text.lowercased())
 

@@ -32,7 +32,9 @@ func transcriptionOnlyEmitsTranscriptWithoutTranslationOrOverlay() async throws 
     audio.yield(pipelineAudioChunk(timestamp: 5))
 
     try await pipelineEventually {
-        await transcriptRecorder.count == 1
+        let transcriptCount = await transcriptRecorder.count
+        let diagnosticsCount = await diagnosticsRecorder.count
+        return transcriptCount == 1 && diagnosticsCount > 0
     }
 
     #expect(await translation.callCount == 0)
@@ -160,6 +162,7 @@ private actor PipelineTranscriptRecorder {
 
 private actor PipelineDiagnosticsRecorder {
     private var values: [WhisperDiagnostics] = []
+    var count: Int { values.count }
     var latest: WhisperDiagnostics { values.last ?? WhisperDiagnostics() }
 
     func append(_ diagnostics: WhisperDiagnostics) {
