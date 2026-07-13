@@ -25,6 +25,7 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
     }
 
     public func start() async throws {
+        MLingoLogger.audio.info("Starting ScreenCaptureKit audio capture")
         captureState = .requestingPermission
 
         do {
@@ -35,6 +36,7 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
 
             guard let display = content.displays.first else {
                 captureState = .failed(MLingoError.noAudioSource.localizedDescription)
+                MLingoLogger.audio.error("No capturable display is available")
                 throw MLingoError.noAudioSource
             }
 
@@ -54,9 +56,11 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
 
             self.stream = stream
             captureState = .running
+            MLingoLogger.audio.info("ScreenCaptureKit audio capture started with display size \(display.width)x\(display.height)")
         } catch {
             let message = error.localizedDescription
             captureState = .failed(message)
+            MLingoLogger.audio.error("ScreenCaptureKit audio capture failed: \(message, privacy: .public)")
             if message.localizedCaseInsensitiveContains("permission") {
                 throw MLingoError.permissionDenied("Allow Screen Recording for MLingo in System Settings, then restart capture.")
             }
@@ -67,6 +71,7 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
     public func stop() async {
         guard let stream else {
             captureState = .stopped
+            MLingoLogger.audio.debug("Stop requested while audio capture is not running")
             return
         }
 
@@ -74,11 +79,13 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
             try await stream.stopCapture()
         } catch {
             captureState = .failed(error.localizedDescription)
+            MLingoLogger.audio.error("Stopping ScreenCaptureKit audio capture failed: \(error.localizedDescription, privacy: .public)")
             return
         }
 
         self.stream = nil
         captureState = .stopped
+        MLingoLogger.audio.info("ScreenCaptureKit audio capture stopped")
     }
 
     public func stream(
@@ -99,6 +106,7 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
 
     public func stream(_ stream: SCStream, didStopWithError error: Error) {
         captureState = .failed(error.localizedDescription)
+        MLingoLogger.audio.error("ScreenCaptureKit stream stopped with error: \(error.localizedDescription, privacy: .public)")
         continuation?.finish()
     }
 

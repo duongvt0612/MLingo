@@ -26,18 +26,23 @@ public final class SubtitlePipeline {
     }
 
     public func start(onError: @escaping @Sendable (String) -> Void) async {
+        MLingoLogger.pipeline.info("Starting subtitle pipeline")
         await stop()
 
         do {
             let settings = try await settingsStore.load()
             try await whisperEngine.loadModel(named: settings.whisperModel)
             try await audioEngine.start()
-            await overlayEngine.show()
+            overlayEngine.show()
+            MLingoLogger.pipeline.info("Subtitle pipeline started")
 
             task = Task { [audioEngine, whisperEngine, translationEngine, settingsStore, overlayEngine] in
                 var queue = OrderedSubtitleQueue()
                 for await chunk in audioEngine.chunks {
-                    if Task.isCancelled { return }
+                    if Task.isCancelled {
+                        MLingoLogger.pipeline.debug("Subtitle pipeline task cancelled")
+                        return
+                    }
 
                     do {
                         let settings = try await settingsStore.load()
@@ -49,23 +54,27 @@ public final class SubtitlePipeline {
                         let ready = queue.insert(subtitle)
 
                         for item in ready {
-                            await overlayEngine.update(with: item, settings: settings)
+                            overlayEngine.update(with: item, settings: settings)
                         }
                     } catch {
+                        MLingoLogger.pipeline.error("Subtitle pipeline iteration failed: \(error.localizedDescription, privacy: .public)")
                         onError(error.localizedDescription)
                     }
                 }
             }
         } catch {
+            MLingoLogger.pipeline.error("Subtitle pipeline failed to start: \(error.localizedDescription, privacy: .public)")
             onError(error.localizedDescription)
         }
     }
 
     public func stop() async {
+        MLingoLogger.pipeline.info("Stopping subtitle pipeline")
         task?.cancel()
         task = nil
         queue = OrderedSubtitleQueue()
         await audioEngine.stop()
-        await overlayEngine.hide()
+        overlayEngine.hide()
+        MLingoLogger.pipeline.info("Subtitle pipeline stopped")
     }
 }
