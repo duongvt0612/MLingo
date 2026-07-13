@@ -42,7 +42,7 @@ Only text is sent to the translation API.
 
 Language
 
-- Swift 6
+- Swift 6.2
 
 UI
 
@@ -60,7 +60,7 @@ Audio
 
 Speech Recognition
 
-- MLX Whisper
+- MLX Whisper via `mlx-audio-swift` 0.1.3
 
 Networking
 
@@ -317,6 +317,34 @@ Translation
 Rendering
 
 <100 ms
+
+---
+
+# Development
+
+The default local Whisper model is `mlx-community/whisper-base-mlx`. Model artifacts are downloaded from Hugging Face on first use and then cached locally. Audio samples are never uploaded; only recognized text enters the OpenAI translation path.
+
+Run the offline unit suite:
+
+```bash
+rtk proxy swift test
+```
+
+Run the opt-in native MLX fixture test (downloads the model if it is not cached):
+
+```bash
+rtk proxy env MLINGO_RUN_MLX_INTEGRATION=1 swift test --filter MLXWhisperIntegrationTests
+```
+
+The command-line SwiftPM builder cannot compile MLX Metal shaders. For GPU inference, build the package directly with Xcode (no generated Xcode project is required) and ensure the Metal Toolchain component is installed:
+
+```bash
+rtk proxy env MLINGO_RUN_MLX_INTEGRATION=1 xcodebuild test \
+  -scheme MLingo-Package \
+  -destination 'platform=macOS,arch=arm64' \
+  -only-testing:MLingoCoreTests \
+  -skipPackagePluginValidation
+```
 
 Total
 

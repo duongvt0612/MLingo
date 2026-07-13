@@ -42,7 +42,10 @@ let package = Package(
         .testTarget(
             name: "MLingoCoreTests",
             dependencies: ["MLingoCore"],
-            path: "Tests/MLingoCoreTests"
+            path: "Tests/MLingoCoreTests",
+            resources: [
+                .copy("Fixtures")
+            ]
         )
     ]
 )
