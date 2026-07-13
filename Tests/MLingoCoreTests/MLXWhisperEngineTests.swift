@@ -101,7 +101,7 @@ func mlxMetalLibraryAvailabilityFindsXcodeResourceBundle() throws {
     #expect(
         FileManager.default.createFile(
             atPath: resourceDirectory.appending(path: "default.metallib").path,
-            contents: Data()
+            contents: Data([0])
         )
     )
     #expect(MLXMetalLibraryAvailability.isAvailable(searchRoots: [root]))

@@ -9,9 +9,24 @@ protocol WhisperInferenceBackend: Sendable {
 }
 
 actor MLXAudioWhisperBackend: WhisperInferenceBackend {
+    private let isMetalLibraryAvailable: @Sendable () -> Bool
     private var model: WhisperModel?
 
+    init(
+        isMetalLibraryAvailable: @escaping @Sendable () -> Bool = {
+            MLXMetalLibraryAvailability.isAvailable()
+        }
+    ) {
+        self.isMetalLibraryAvailable = isMetalLibraryAvailable
+    }
+
     func loadModel(named modelName: String) async throws {
+        guard isMetalLibraryAvailable() else {
+            throw MLingoError.whisperModelLoadFailed(
+                "MLX Metal shaders are missing from this build. `swift run` does not package mlx-swift Metal resources. Install the Metal Toolchain and run the MLingo-Package scheme in Xcode."
+            )
+        }
+
         model = try await WhisperModel.fromPretrained(
             Self.resolvedModelName(for: modelName)
         )

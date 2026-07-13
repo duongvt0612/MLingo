@@ -324,6 +324,15 @@ Rendering
 
 The default local Whisper model is `mlx-community/whisper-base-mlx`. Model artifacts are downloaded from Hugging Face on first use and then cached locally. Audio samples are never uploaded; only recognized text enters the OpenAI translation path.
 
+To run Whisper, open `Package.swift` in Xcode, select the `MLingo-Package` scheme, and press Run. Install the Metal Toolchain first if Xcode has not already installed it:
+
+```bash
+xcodebuild -downloadComponent MetalToolchain
+open Package.swift
+```
+
+Do not use `swift run` for transcription. Command-line SwiftPM builds the executable but does not package mlx-swift's Metal library; MLingo will report this configuration error instead of letting MLX abort the process.
+
 Run the offline unit suite:
 
 ```bash
