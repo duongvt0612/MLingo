@@ -53,6 +53,25 @@ func mlxWhisperEngineDropsEmptyTranscript() async throws {
     #expect(transcript == nil)
 }
 
+@Test
+func mlxBackendResolvesOnlyManagedLegacyMLXModelIDs() {
+    #expect(
+        MLXAudioWhisperBackend.resolvedModelName(
+            for: "mlx-community/whisper-base-mlx"
+        ) == "mlx-community/whisper-base-asr-fp16"
+    )
+    #expect(
+        MLXAudioWhisperBackend.resolvedModelName(
+            for: "mlx-community/whisper-small-mlx"
+        ) == "mlx-community/whisper-small-asr-fp16"
+    )
+    #expect(
+        MLXAudioWhisperBackend.resolvedModelName(
+            for: "organization/custom-whisper"
+        ) == "organization/custom-whisper"
+    )
+}
+
 private actor StubWhisperBackend: WhisperInferenceBackend {
     private var transcripts: [String]
     private(set) var loadedModelNames: [String] = []
