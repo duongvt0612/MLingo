@@ -59,7 +59,10 @@ public final class SubtitlePipeline {
 
                     do {
                         let settings = try await settingsStore.load()
-                        guard let transcript = try await whisperEngine.transcribe(chunk) else {
+                        guard let transcript = try await whisperEngine.transcribe(
+                            chunk,
+                            language: settings.sourceLanguage
+                        ) else {
                             continue
                         }
 

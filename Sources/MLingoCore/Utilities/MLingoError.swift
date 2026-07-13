@@ -6,7 +6,8 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
     case noAudioSource
     case captureFailed(String)
     case whisperModelUnavailable(String)
-    case whisperIntegrationPending(String)
+    case whisperModelLoadFailed(String)
+    case whisperInferenceFailed(String)
     case translationFailed(String)
     case invalidResponse
 
@@ -22,7 +23,9 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
             message
         case .whisperModelUnavailable(let message):
             message
-        case .whisperIntegrationPending(let message):
+        case .whisperModelLoadFailed(let message):
+            message
+        case .whisperInferenceFailed(let message):
             message
         case .translationFailed(let message):
             message
