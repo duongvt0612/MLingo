@@ -19,7 +19,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var showBilingualSubtitles: Bool
 
     public init(
-        whisperModel: String = "mlx-community/whisper-small",
+        whisperModel: String = "mlx-community/whisper-base-mlx",
         openAIModel: String = "gpt-4.1-mini",
         subtitleFontName: String = ".SFNS-Regular",
         subtitleFontSize: Double = 34,

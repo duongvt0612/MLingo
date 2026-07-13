@@ -9,7 +9,8 @@ func adaptiveWindowFlushesShortSpeechAfterSilence() throws {
     #expect(accumulator.append(chunk(duration: 0.2, timestamp: 10)).isEmpty)
     #expect(accumulator.append(chunk(duration: 0.25, timestamp: 10.2)).isEmpty)
 
-    let window = try #require(accumulator.flushForSilence())
+    let flushedWindow = accumulator.flushForSilence()
+    let window = try #require(flushedWindow)
     #expect(abs(window.duration - 0.45) < 0.001)
     #expect(window.timestamp == 10)
     #expect(window.samples.count == 7_200)
@@ -47,7 +48,8 @@ func transcriptDeduplicatorRejectsEmptyExactAndNearDuplicates() throws {
 
     #expect(deduplicator.process(Transcript(text: "   ", timestamp: 0)) == nil)
 
-    let first = try #require(deduplicator.process(Transcript(text: "Hello, world!", timestamp: 1)))
+    let processedFirst = deduplicator.process(Transcript(text: "Hello, world!", timestamp: 1))
+    let first = try #require(processedFirst)
     #expect(first.text == "Hello, world!")
     #expect(deduplicator.process(Transcript(text: " hello world ", timestamp: 2)) == nil)
     #expect(deduplicator.process(Transcript(text: "Hello worlds", timestamp: 3)) == nil)
@@ -59,9 +61,10 @@ func transcriptDeduplicatorTrimsWindowOverlap() throws {
     var deduplicator = TranscriptDeduplicator()
     _ = deduplicator.process(Transcript(text: "Welcome to the live stream", timestamp: 1))
 
-    let next = try #require(
-        deduplicator.process(Transcript(text: "the live stream today we discuss Swift", timestamp: 2))
+    let processedNext = deduplicator.process(
+        Transcript(text: "the live stream today we discuss Swift", timestamp: 2)
     )
+    let next = try #require(processedNext)
 
     #expect(next.text == "today we discuss Swift")
     #expect(next.timestamp == 2)
