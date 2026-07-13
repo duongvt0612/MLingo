@@ -87,6 +87,26 @@ func mlxBackendRejectsMissingMetalLibraryBeforeLoadingModel() async {
     }
 }
 
+@Test
+func mlxMetalLibraryAvailabilityFindsXcodeResourceBundle() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appending(path: "MLingo-Metal-\(UUID().uuidString)", directoryHint: .isDirectory)
+    let resourceDirectory = root
+        .appending(path: "mlx-swift_Cmlx.bundle", directoryHint: .isDirectory)
+        .appending(path: "Contents/Resources", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: resourceDirectory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    #expect(MLXMetalLibraryAvailability.isAvailable(searchRoots: [root]) == false)
+    #expect(
+        FileManager.default.createFile(
+            atPath: resourceDirectory.appending(path: "default.metallib").path,
+            contents: Data()
+        )
+    )
+    #expect(MLXMetalLibraryAvailability.isAvailable(searchRoots: [root]))
+}
+
 private actor StubWhisperBackend: WhisperInferenceBackend {
     private var transcripts: [String]
     private(set) var loadedModelNames: [String] = []
