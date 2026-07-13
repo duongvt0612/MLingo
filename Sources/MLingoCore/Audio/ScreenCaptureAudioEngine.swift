@@ -6,6 +6,8 @@ import ScreenCaptureKit
 public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private static let targetSampleRate: Double = 16_000
     private static let targetChannelCount = 1
+    private static let scStreamUserDeclinedCode = -3801
+    private static let scStreamUserStoppedCode = -3817
 
     private let outputQueue = DispatchQueue(label: "com.duongvt.MLingo.audio-output")
     private let outputQueueKey = DispatchSpecificKey<Bool>()
@@ -78,13 +80,11 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
             }
             MLingoLogger.audio.info("ScreenCaptureKit audio capture started with display size \(display.width, privacy: .public)x\(display.height, privacy: .public)")
         } catch {
-            let message = error.localizedDescription
+            let mappedError = Self.mapStartError(error)
+            let message = mappedError.localizedDescription
             updateDiagnostics(state: .failed(message))
-            MLingoLogger.audio.error("ScreenCaptureKit audio capture failed: \(message, privacy: .public)")
-            if message.localizedCaseInsensitiveContains("permission") {
-                throw MLingoError.permissionDenied("Cấp quyền Screen Recording cho MLingo trong System Settings > Privacy & Security > Screen Recording, rồi restart capture.")
-            }
-            throw MLingoError.captureFailed(message)
+            MLingoLogger.audio.error("ScreenCaptureKit audio capture failed: \(error.localizedDescription, privacy: .public)")
+            throw mappedError
         }
     }
 
@@ -147,14 +147,23 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
     }
 
     public func stream(_ stream: SCStream, didStopWithError error: Error) {
+        guard !Self.isScreenCaptureKitError(error, code: Self.scStreamUserStoppedCode) else {
+            performOnOutputQueue {
+                self.stream = nil
+                captureState = .stopped
+                _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.update(state: .stopped))
+            }
+            MLingoLogger.audio.debug("ScreenCaptureKit stream stopped by user")
+            return
+        }
+
         let failedState = AudioCaptureState.failed(error.localizedDescription)
         performOnOutputQueue {
+            self.stream = nil
             captureState = failedState
             _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.update(state: failedState))
         }
         MLingoLogger.audio.error("ScreenCaptureKit stream stopped with error: \(error.localizedDescription, privacy: .public)")
-        continuation?.finish()
-        diagnosticsContinuation?.finish()
     }
 
     private static func makeChunk(from sampleBuffer: CMSampleBuffer) -> AudioChunk? {
@@ -411,6 +420,23 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
         return Array(UnsafeBufferPointer(start: outputChannel, count: Int(outputBuffer.frameLength)))
     }
 
+    private static func mapStartError(_ error: Error) -> MLingoError {
+        if let mlingoError = error as? MLingoError {
+            return mlingoError
+        }
+
+        if isScreenCaptureKitError(error, code: scStreamUserDeclinedCode) {
+            return .permissionDenied("Cấp quyền Screen Recording cho MLingo trong System Settings > Privacy & Security > Screen Recording, rồi restart capture.")
+        }
+
+        return .captureFailed(error.localizedDescription)
+    }
+
+    private static func isScreenCaptureKitError(_ error: Error, code: Int) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == SCStreamErrorDomain && nsError.code == code
+    }
+
     private func resetDiagnostics(state: AudioCaptureState) {
         performOnOutputQueue {
             captureState = state
@@ -467,7 +493,7 @@ private final class AudioConverterInputProvider: @unchecked Sendable {
 
     func nextBuffer(outStatus: UnsafeMutablePointer<AVAudioConverterInputStatus>) -> AVAudioBuffer? {
         guard !didProvideSource else {
-            outStatus.pointee = .noDataNow
+            outStatus.pointee = .endOfStream
             return nil
         }
 

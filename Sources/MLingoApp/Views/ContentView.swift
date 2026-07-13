@@ -122,7 +122,7 @@ struct ContentView: View {
                 progressRow("Whisper boundary", isReady: true)
             }
             GridRow {
-                progressRow("OpenAI API key", isReady: !viewModel.apiKey.isEmpty)
+                progressRow("OpenAI API key", isReady: !viewModel.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 progressRow("Subtitle overlay", isReady: true)
             }
         }

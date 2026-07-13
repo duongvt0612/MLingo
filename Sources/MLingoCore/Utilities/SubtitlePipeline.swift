@@ -43,8 +43,8 @@ public final class SubtitlePipeline {
             if let onAudioDiagnostics {
                 diagnosticsTask = Task { [audioEngine] in
                     for await diagnostics in audioEngine.diagnostics {
-                        onAudioDiagnostics(diagnostics)
                         if Task.isCancelled { return }
+                        onAudioDiagnostics(diagnostics)
                     }
                 }
             }
