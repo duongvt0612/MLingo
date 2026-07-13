@@ -81,7 +81,7 @@ func mlxBackendRejectsMissingMetalLibraryBeforeLoadingModel() async {
         Issue.record("Expected the backend to reject a build without MLX Metal resources")
     } catch let error as MLingoError {
         #expect(error.errorDescription?.contains("swift run") == true)
-        #expect(error.errorDescription?.contains("MLingo-Package") == true)
+        #expect(error.errorDescription?.contains("MLingo scheme") == true)
     } catch {
         Issue.record("Expected MLingoError, received \(error)")
     }
