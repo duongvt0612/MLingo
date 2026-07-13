@@ -125,10 +125,10 @@ final class MLingoViewModel {
 
             soundTestTask = Task { [weak self, audioEngine] in
                 for await diagnostics in audioEngine.diagnostics {
-                    if Task.isCancelled { return }
                     Task { @MainActor in
                         self?.audioDiagnostics = diagnostics
                     }
+                    if Task.isCancelled { return }
                 }
             }
 
@@ -164,9 +164,9 @@ final class MLingoViewModel {
     private func stopSoundTestSession(statusAfterStop: String?) async {
         guard isTestingSound || soundTestEngine != nil || soundTestTask != nil else { return }
 
+        await soundTestEngine?.stop()
         soundTestTask?.cancel()
         soundTestTask = nil
-        await soundTestEngine?.stop()
         soundTestEngine = nil
         isTestingSound = false
         if let statusAfterStop {

@@ -43,8 +43,8 @@ public final class SubtitlePipeline {
             if let onAudioDiagnostics {
                 diagnosticsTask = Task { [audioEngine] in
                     for await diagnostics in audioEngine.diagnostics {
-                        if Task.isCancelled { return }
                         onAudioDiagnostics(diagnostics)
+                        if Task.isCancelled { return }
                     }
                 }
             }
@@ -85,10 +85,10 @@ public final class SubtitlePipeline {
         MLingoLogger.pipeline.info("Stopping subtitle pipeline")
         task?.cancel()
         task = nil
+        await audioEngine.stop()
         diagnosticsTask?.cancel()
         diagnosticsTask = nil
         queue = OrderedSubtitleQueue()
-        await audioEngine.stop()
         overlayEngine.hide()
         MLingoLogger.pipeline.info("Subtitle pipeline stopped")
     }
