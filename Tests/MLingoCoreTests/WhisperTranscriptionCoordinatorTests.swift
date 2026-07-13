@@ -34,12 +34,15 @@ func coordinatorFlushesShortSpeechAfterSilence() async throws {
 func coordinatorSerializesInferenceAndReportsWindowDiagnostics() async throws {
     let engine = SequencingWhisperEngine(inferenceDelay: .milliseconds(20))
     let diagnosticsRecorder = DiagnosticsRecorder()
+    let transcriptRecorder = TranscriptRecorder()
     let coordinator = WhisperTranscriptionCoordinator(engine: engine)
 
     try await coordinator.start(
         modelID: "fixture/whisper",
         language: "Vietnamese",
-        onTranscript: { _ in },
+        onTranscript: { transcript in
+            await transcriptRecorder.append(transcript)
+        },
         onDiagnostics: { diagnostics in
             await diagnosticsRecorder.append(diagnostics)
         }
@@ -58,6 +61,7 @@ func coordinatorSerializesInferenceAndReportsWindowDiagnostics() async throws {
     #expect(latest.modelID == "fixture/whisper")
     #expect(latest.windowDuration == 3)
     #expect(latest.inferenceLatency > 0)
+    #expect(await transcriptRecorder.timestamps == [20, 23])
     await coordinator.stop()
 }
 
@@ -170,6 +174,7 @@ private actor TranscriptRecorder {
 
     var count: Int { values.count }
     var first: Transcript? { values.first }
+    var timestamps: [TimeInterval] { values.map(\.timestamp) }
 
     func append(_ transcript: Transcript) {
         values.append(transcript)
