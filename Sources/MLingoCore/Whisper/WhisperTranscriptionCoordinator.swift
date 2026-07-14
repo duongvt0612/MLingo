@@ -308,7 +308,14 @@ public actor WhisperTranscriptionCoordinator {
                     text: transcript.text,
                     timestamp: timestamp
                 )
-                let emittedTranscript = deduplicator.process(timestampedTranscript)
+                let audioOverlapDuration = max(
+                    0,
+                    (latestProcessedAudioEnd ?? window.timestamp) - window.timestamp
+                )
+                let emittedTranscript = deduplicator.process(
+                    timestampedTranscript,
+                    audioOverlapDuration: audioOverlapDuration
+                )
                 diagnostics.suppressedDuplicateCount = deduplicator.suppressedCount
                 if let emittedTranscript {
                     diagnostics.lastTranscript = emittedTranscript.text

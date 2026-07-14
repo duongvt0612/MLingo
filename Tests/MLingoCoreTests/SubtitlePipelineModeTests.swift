@@ -97,6 +97,35 @@ func translationModePreservesTranslationAndOverlayFlow() async throws {
 }
 
 @Test @MainActor
+func translationModeReceivesOnlyTextAfterFuzzyOverlap() async throws {
+    let audio = PipelineAudioEngine()
+    let whisper = PipelineScriptedWhisperEngine(texts: [
+        "We need a very reliable transcript",
+        "a really reliable transcript before translation starts",
+    ])
+    let translation = PipelineTranslationEngine()
+    let pipeline = SubtitlePipeline(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: whisper,
+        translationEngine: translation,
+        overlayEngine: PipelineOverlayEngine(),
+        settingsStore: PipelineSettingsStore()
+    )
+
+    await pipeline.start(mode: .translation, onError: { _ in })
+    audio.yield(pipelineAudioChunk(timestamp: 0))
+    try await pipelineEventually { await translation.callCount == 1 }
+    audio.yield(pipelineAudioChunk(timestamp: 3))
+    try await pipelineEventually { await translation.callCount == 2 }
+
+    #expect(await translation.originalTexts == [
+        "We need a very reliable transcript",
+        "before translation starts",
+    ])
+    await pipeline.stop()
+}
+
+@Test @MainActor
 func audioDiagnosticsSkipStaleSnapshotsWhenUIIsBusy() async throws {
     let audio = PipelineAudioEngine()
     let recorder = SlowAudioDiagnosticsRecorder()
@@ -267,11 +296,28 @@ private actor PipelineWhisperEngine: WhisperEngineProtocol {
     }
 }
 
+private actor PipelineScriptedWhisperEngine: WhisperEngineProtocol {
+    private var texts: [String]
+
+    init(texts: [String]) {
+        self.texts = texts
+    }
+
+    func loadModel(named modelName: String) async throws {}
+
+    func transcribe(_ chunk: AudioChunk, language: String) async throws -> Transcript? {
+        guard !texts.isEmpty else { return nil }
+        return Transcript(text: texts.removeFirst(), timestamp: chunk.timestamp)
+    }
+}
+
 private actor PipelineTranslationEngine: TranslationEngineProtocol {
     private(set) var callCount = 0
+    private(set) var originalTexts: [String] = []
 
     func translate(_ transcript: Transcript, settings: AppSettings) async throws -> SubtitleItem {
         callCount += 1
+        originalTexts.append(transcript.text)
         return SubtitleItem(
             original: transcript.text,
             translated: "Bản dịch",
