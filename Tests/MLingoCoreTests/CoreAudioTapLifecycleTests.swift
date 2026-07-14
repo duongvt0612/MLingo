@@ -4,7 +4,7 @@ import Testing
 @testable import MLingoCore
 
 @Test
-func systemAudioFactorySelectsBackendByOperatingSystemAvailability() {
+func systemAudioFactoryHonorsPreferredBackendWhenAvailable() {
     let coreAudio = FactoryAudioEngine()
     let screenCaptureKit = FactoryAudioEngine()
 
@@ -19,8 +19,9 @@ func systemAudioFactorySelectsBackendByOperatingSystemAvailability() {
         makeScreenCaptureKitEngine: { screenCaptureKit }
     )
 
-    #expect(modernFactory.makeAudioEngine() === coreAudio)
-    #expect(legacyFactory.makeAudioEngine() === screenCaptureKit)
+    #expect(modernFactory.makeAudioEngine(preferredBackend: .coreAudioTap) === coreAudio)
+    #expect(modernFactory.makeAudioEngine(preferredBackend: .screenCaptureKit) === screenCaptureKit)
+    #expect(legacyFactory.makeAudioEngine(preferredBackend: .coreAudioTap) === screenCaptureKit)
 }
 
 @Test
@@ -40,7 +41,7 @@ func modernFactoryDoesNotFallbackAfterCoreAudioPermissionFailure() async {
         }
     )
 
-    let engine = factory.makeAudioEngine()
+    let engine = factory.makeAudioEngine(preferredBackend: .coreAudioTap)
     do {
         try await engine.start()
         Issue.record("Expected Core Audio permission denial")

@@ -45,6 +45,26 @@ func transcriptionOnlyEmitsTranscriptWithoutTranslationOrOverlay() async throws 
 }
 
 @Test @MainActor
+func pipelineUsesCaptureBackendFromSettings() async {
+    let audio = PipelineAudioEngine()
+    let factory = PipelineAudioEngineFactory(engines: [audio])
+    let pipeline = SubtitlePipeline(
+        audioEngineFactory: factory,
+        whisperEngine: PipelineWhisperEngine(text: "unused"),
+        translationEngine: PipelineTranslationEngine(),
+        overlayEngine: PipelineOverlayEngine(),
+        settingsStore: PipelineSettingsStore(
+            settings: AppSettings(audioCaptureBackend: .screenCaptureKit)
+        )
+    )
+
+    await pipeline.start(mode: .transcriptionOnly, onError: { _ in })
+
+    #expect(factory.requestedBackends == [.screenCaptureKit])
+    await pipeline.stop()
+}
+
+@Test @MainActor
 func translationModePreservesTranslationAndOverlayFlow() async throws {
     let audio = PipelineAudioEngine()
     let whisper = PipelineWhisperEngine(text: "Translate this")
@@ -167,14 +187,16 @@ private final class PipelineAudioEngineFactory: AudioEngineFactoryProtocol, @unc
     private let lock = NSLock()
     private var engines: [PipelineAudioEngine]
     private(set) var makeCount = 0
+    private(set) var requestedBackends: [AudioCaptureBackend] = []
 
     init(engines: [PipelineAudioEngine]) {
         self.engines = engines
     }
 
-    func makeAudioEngine() -> any AudioEngineProtocol {
+    func makeAudioEngine(preferredBackend: AudioCaptureBackend) -> any AudioEngineProtocol {
         lock.withLock {
             makeCount += 1
+            requestedBackends.append(preferredBackend)
             return engines.removeFirst()
         }
     }
@@ -277,7 +299,11 @@ private final class PipelineOverlayEngine: OverlayEngineProtocol {
 }
 
 private actor PipelineSettingsStore: SettingsStoreProtocol {
-    private var settings = AppSettings()
+    private var settings: AppSettings
+
+    init(settings: AppSettings = AppSettings()) {
+        self.settings = settings
+    }
 
     func load() async throws -> AppSettings { settings }
     func save(_ settings: AppSettings) async throws { self.settings = settings }
