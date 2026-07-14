@@ -76,17 +76,58 @@ func translationModePreservesTranslationAndOverlayFlow() async throws {
     #expect(overlay.hideCount == 1)
 }
 
+@Test @MainActor
+func audioDiagnosticsSkipStaleSnapshotsWhenUIIsBusy() async throws {
+    let audio = PipelineAudioEngine()
+    let recorder = SlowAudioDiagnosticsRecorder()
+    let pipeline = SubtitlePipeline(
+        audioEngine: audio,
+        whisperEngine: PipelineWhisperEngine(text: "unused"),
+        translationEngine: PipelineTranslationEngine(),
+        overlayEngine: PipelineOverlayEngine(),
+        settingsStore: PipelineSettingsStore()
+    )
+
+    await pipeline.start(
+        mode: .transcriptionOnly,
+        onError: { _ in },
+        onAudioDiagnostics: { diagnostics in
+            await recorder.append(diagnostics)
+        }
+    )
+
+    audio.yieldDiagnostics(capturedChunkCount: 1)
+    try await pipelineEventually {
+        await recorder.isHandlingFirstSnapshot
+    }
+
+    audio.yieldDiagnostics(capturedChunkCount: 2)
+    audio.yieldDiagnostics(capturedChunkCount: 3)
+    await recorder.releaseFirstSnapshot()
+
+    try await pipelineEventually {
+        await recorder.capturedChunkCounts.count == 2
+    }
+    #expect(await recorder.capturedChunkCounts == [1, 3])
+    await pipeline.stop()
+}
+
 private final class PipelineAudioEngine: AudioEngineProtocol, @unchecked Sendable {
     let chunks: AsyncStream<AudioChunk>
     let diagnostics: AsyncStream<AudioCaptureDiagnostics>
     private let chunkContinuation: AsyncStream<AudioChunk>.Continuation
+    private let diagnosticsContinuation: AsyncStream<AudioCaptureDiagnostics>.Continuation
 
     init() {
         let (chunks, chunkContinuation) = AsyncStream.makeStream(of: AudioChunk.self)
-        let (diagnostics, _) = AsyncStream.makeStream(of: AudioCaptureDiagnostics.self)
+        let (diagnostics, diagnosticsContinuation) = AsyncStream.makeStream(
+            of: AudioCaptureDiagnostics.self,
+            bufferingPolicy: .bufferingNewest(1)
+        )
         self.chunks = chunks
         self.diagnostics = diagnostics
         self.chunkContinuation = chunkContinuation
+        self.diagnosticsContinuation = diagnosticsContinuation
     }
 
     var state: AudioCaptureState { get async { .running } }
@@ -96,6 +137,15 @@ private final class PipelineAudioEngine: AudioEngineProtocol, @unchecked Sendabl
 
     func yield(_ chunk: AudioChunk) {
         chunkContinuation.yield(chunk)
+    }
+
+    func yieldDiagnostics(capturedChunkCount: Int) {
+        diagnosticsContinuation.yield(
+            AudioCaptureDiagnostics(
+                capturedChunkCount: capturedChunkCount,
+                state: .running
+            )
+        )
     }
 }
 
@@ -167,6 +217,31 @@ private actor PipelineDiagnosticsRecorder {
 
     func append(_ diagnostics: WhisperDiagnostics) {
         values.append(diagnostics)
+    }
+}
+
+private actor SlowAudioDiagnosticsRecorder {
+    private var values: [AudioCaptureDiagnostics] = []
+    private var firstSnapshotContinuation: CheckedContinuation<Void, Never>?
+    private(set) var isHandlingFirstSnapshot = false
+
+    var capturedChunkCounts: [Int] {
+        values.map(\.capturedChunkCount)
+    }
+
+    func append(_ diagnostics: AudioCaptureDiagnostics) async {
+        if values.isEmpty {
+            isHandlingFirstSnapshot = true
+            await withCheckedContinuation { continuation in
+                firstSnapshotContinuation = continuation
+            }
+        }
+        values.append(diagnostics)
+    }
+
+    func releaseFirstSnapshot() {
+        firstSnapshotContinuation?.resume()
+        firstSnapshotContinuation = nil
     }
 }
 

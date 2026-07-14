@@ -52,3 +52,17 @@ func diagnosticsAccumulatorTracksChunkCounters() {
     #expect(diagnostics.sampleRate == 16_000)
     #expect(diagnostics.channelCount == 1)
 }
+
+@Test
+func diagnosticsStreamDropsStaleSnapshots() async {
+    let (stream, continuation) = ScreenCaptureAudioEngine.makeDiagnosticsStream()
+
+    continuation.yield(AudioCaptureDiagnostics(capturedChunkCount: 1))
+    continuation.yield(AudioCaptureDiagnostics(capturedChunkCount: 2))
+    continuation.yield(AudioCaptureDiagnostics(capturedChunkCount: 3))
+    continuation.finish()
+
+    var iterator = stream.makeAsyncIterator()
+    #expect(await iterator.next()?.capturedChunkCount == 3)
+    #expect(await iterator.next() == nil)
+}
