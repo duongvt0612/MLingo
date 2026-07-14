@@ -17,7 +17,7 @@ public actor WhisperTranscriptionCoordinator {
     private var errorHandler: ErrorHandler?
     private var silenceTask: Task<Void, Never>?
     private var processingTask: Task<Void, Never>?
-    private var pendingWindow: AudioChunk?
+    private var pendingWindows: [AudioChunk] = []
     private var latestProcessedAudioEnd: TimeInterval?
 
     public init(engine: WhisperEngineProtocol) {
@@ -72,7 +72,7 @@ public actor WhisperTranscriptionCoordinator {
         diagnostics.modelState = .ready
         await onDiagnostics(diagnostics)
 
-        pendingWindow = nil
+        pendingWindows.removeAll(keepingCapacity: true)
     }
 
     public func ingest(_ chunk: AudioChunk) {
@@ -101,7 +101,7 @@ public actor WhisperTranscriptionCoordinator {
         silenceTask = nil
         processingTask?.cancel()
         processingTask = nil
-        pendingWindow = nil
+        pendingWindows.removeAll(keepingCapacity: true)
         accumulator.reset()
         deduplicator.reset()
         latestProcessedAudioEnd = nil
@@ -130,14 +130,16 @@ public actor WhisperTranscriptionCoordinator {
             return
         }
 
-        if let pendingWindow {
-            self.pendingWindow = Self.coalesce(
-                pendingWindow,
-                with: window,
-                maximumDuration: configuration.maximumWindowDuration
-            )
+        if let lastWindow = pendingWindows.last,
+           let coalescedWindow = Self.coalesceWithoutDropping(
+               lastWindow,
+               with: window,
+               maximumDuration: configuration.maximumWindowDuration
+           )
+        {
+            pendingWindows[pendingWindows.count - 1] = coalescedWindow
         } else {
-            pendingWindow = window
+            pendingWindows.append(window)
         }
     }
 
@@ -158,22 +160,21 @@ public actor WhisperTranscriptionCoordinator {
         {
             await process(window, sessionID: expectedSessionID)
             guard sessionID == expectedSessionID, !Task.isCancelled else { return }
-            nextWindow = pendingWindow
-            pendingWindow = nil
+            nextWindow = pendingWindows.isEmpty ? nil : pendingWindows.removeFirst()
         }
     }
 
-    private static func coalesce(
+    private static func coalesceWithoutDropping(
         _ older: AudioChunk,
         with newer: AudioChunk,
         maximumDuration: TimeInterval
-    ) -> AudioChunk {
+    ) -> AudioChunk? {
         guard
             older.sampleRate == newer.sampleRate,
             older.channelCount == newer.channelCount,
             older.sampleRate > 0
         else {
-            return newer
+            return nil
         }
 
         let sampleRate = older.sampleRate
@@ -195,9 +196,7 @@ public actor WhisperTranscriptionCoordinator {
         }
 
         let maximumSampleCount = max(1, Int((maximumDuration * sampleRate).rounded()))
-        if combinedSamples.count > maximumSampleCount {
-            combinedSamples.removeFirst(combinedSamples.count - maximumSampleCount)
-        }
+        guard combinedSamples.count <= maximumSampleCount else { return nil }
 
         let duration = Double(combinedSamples.count) / sampleRate
         let combinedEnd = max(olderEnd, newer.timestamp + newer.duration)
