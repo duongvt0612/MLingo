@@ -1,6 +1,12 @@
 // swift-tools-version: 6.3
 
 import PackageDescription
+import Foundation
+
+let appInfoPlist = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .appending(path: "Sources/MLingoApp/Resources/Info.plist")
+    .path
 
 let package = Package(
     name: "MLingo",
@@ -37,6 +43,14 @@ let package = Package(
             path: "Sources/MLingoApp",
             resources: [
                 .copy("Resources")
+            ],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", appInfoPlist,
+                ])
             ]
         ),
         .testTarget(
