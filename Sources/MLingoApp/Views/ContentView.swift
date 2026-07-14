@@ -260,9 +260,8 @@ struct ContentView: View {
     }
 
     private var transcriptionResultPanel: some View {
-        let transcript = viewModel.transcriptionText
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let hasTranscript = !transcript.isEmpty
+        let entries = viewModel.transcriptionEntries
+        let hasTranscript = !entries.isEmpty
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
@@ -274,11 +273,10 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Text(hasTranscript ? transcript : transcriptionResultPlaceholder)
-                .font(hasTranscript ? .body : .callout)
-                .foregroundStyle(hasTranscript ? .primary : .secondary)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
+            TranscriptLogView(
+                entries: entries,
+                placeholder: transcriptionResultPlaceholder
+            )
         }
         .padding(14)
         .background(
@@ -289,9 +287,12 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(.separator.opacity(0.7), lineWidth: 1)
         }
-        .accessibilityElement(children: .combine)
         .accessibilityLabel("Speech-to-text result in \(viewModel.settings.sourceLanguage)")
-        .accessibilityValue(hasTranscript ? transcript : transcriptionResultPlaceholder)
+        .accessibilityValue(
+            hasTranscript
+                ? "\(entries.count) transcript lines"
+                : transcriptionResultPlaceholder
+        )
     }
 
     private var transcriptionResultPlaceholder: String {
@@ -417,6 +418,70 @@ struct ContentView: View {
         }
         .font(.callout)
         .padding(.vertical, 7)
+    }
+}
+
+private struct TranscriptLogView: View {
+    let entries: [TranscriptLogEntry]
+    let placeholder: String
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    if entries.isEmpty {
+                        Text(placeholder)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .frame(
+                                maxWidth: .infinity,
+                                minHeight: 132,
+                                alignment: .topLeading
+                            )
+                    } else {
+                        ForEach(entries) { entry in
+                            TranscriptLogRow(entry: entry)
+                                .id(entry.id)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(.vertical, 2)
+            }
+            .textSelection(.enabled)
+            .onChange(of: entries.last?.id) { _, latestID in
+                guard let latestID else { return }
+                if reduceMotion {
+                    proxy.scrollTo(latestID, anchor: .bottom)
+                } else {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(latestID, anchor: .bottom)
+                    }
+                }
+            }
+        }
+        .frame(height: 140)
+    }
+}
+
+private struct TranscriptLogRow: View {
+    let entry: TranscriptLogEntry
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text("[\(entry.timestampPrefix())]")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: true, vertical: false)
+
+            Text(entry.text)
+                .font(.body)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(entry.timestampPrefix()), \(entry.text)")
     }
 }
 

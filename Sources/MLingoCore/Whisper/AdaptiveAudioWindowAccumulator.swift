@@ -67,16 +67,18 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
 
         samples.append(contentsOf: chunk.samples)
 
+        let preferredSampleCount = Int((configuration.preferredWindowDuration * sampleRate).rounded())
         let maximumSampleCount = Int((configuration.maximumWindowDuration * sampleRate).rounded())
+        let targetSampleCount = min(preferredSampleCount, maximumSampleCount)
         let overlapSampleCount = Int((configuration.overlapDuration * sampleRate).rounded())
         var windows: [AudioChunk] = []
 
-        while maximumSampleCount > 0, samples.count >= maximumSampleCount {
-            let windowSamples = Array(samples.prefix(maximumSampleCount))
+        while targetSampleCount > 0, samples.count >= targetSampleCount {
+            let windowSamples = Array(samples.prefix(targetSampleCount))
             windows.append(makeChunk(samples: windowSamples, timestamp: startTimestamp))
 
             let retainedStartIndex = Self.retainedStartIndex(
-                maximumSampleCount: maximumSampleCount,
+                maximumSampleCount: targetSampleCount,
                 overlapSampleCount: overlapSampleCount
             )
             samples.removeFirst(retainedStartIndex)

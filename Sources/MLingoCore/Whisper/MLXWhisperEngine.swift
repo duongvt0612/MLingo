@@ -10,6 +10,7 @@ protocol WhisperInferenceBackend: Sendable {
 }
 
 actor MLXAudioWhisperBackend: WhisperInferenceBackend {
+    private static let whisperSampleRate = 16_000
     private let isMetalLibraryAvailable: @Sendable () -> Bool
     private let cache: HubCache
     private var model: WhisperModel?
@@ -48,6 +49,11 @@ actor MLXAudioWhisperBackend: WhisperInferenceBackend {
         }
     }
 
+    static func maximumTokenCount(sampleCount: Int) -> Int {
+        let duration = Double(max(sampleCount, 0)) / Double(whisperSampleRate)
+        return min(128, max(48, Int(ceil(duration * 16))))
+    }
+
     func transcribe(samples: [Float], language: String) async throws -> String {
         guard let model else {
             throw MLingoError.whisperModelUnavailable(
@@ -55,9 +61,21 @@ actor MLXAudioWhisperBackend: WhisperInferenceBackend {
             )
         }
 
+        let generationParameters = STTGenerateParameters(
+            maxTokens: Self.maximumTokenCount(sampleCount: samples.count),
+            temperature: 0,
+            topP: 1,
+            topK: 0,
+            verbose: false,
+            language: language,
+            chunkDuration: 30,
+            minChunkDuration: 0.1,
+            repetitionPenalty: 1,
+            repetitionContextSize: 32
+        )
         let output = model.generate(
             audio: MLXArray(samples),
-            generationParameters: STTGenerateParameters(language: language)
+            generationParameters: generationParameters
         )
         return output.text
     }

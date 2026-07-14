@@ -17,7 +17,7 @@ final class MLingoViewModel {
     private(set) var activeMode: ActiveMode = .idle
     var status = "Ready"
     var lastError: String?
-    private(set) var transcriptionText = ""
+    private(set) var transcriptionEntries: [TranscriptLogEntry] = []
     var audioDiagnostics = AudioCaptureDiagnostics()
     var whisperDiagnostics = WhisperDiagnostics()
 
@@ -166,7 +166,7 @@ final class MLingoViewModel {
         activeMode = viewMode
         status = startingStatus
         lastError = nil
-        transcriptionText = ""
+        transcriptionEntries = []
         whisperDiagnostics = WhisperDiagnostics(
             modelState: .loading,
             modelID: settings.whisperModel
@@ -197,7 +197,7 @@ final class MLingoViewModel {
                 onTranscript: { [weak self, sessionID] transcript in
                     await MainActor.run {
                         guard self?.activeSessionID == sessionID else { return }
-                        self?.appendTranscriptionText(transcript.text)
+                        self?.appendTranscript(transcript)
                     }
                 },
                 onWhisperDiagnostics: { [weak self, sessionID] diagnostics in
@@ -249,13 +249,19 @@ final class MLingoViewModel {
         }
     }
 
-    private func appendTranscriptionText(_ text: String) {
-        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func appendTranscript(_ transcript: Transcript) {
+        let trimmedText = transcript.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedText.isEmpty else { return }
 
-        transcriptionText = transcriptionText.isEmpty
-            ? trimmedText
-            : "\(transcriptionText)\n\(trimmedText)"
+        let trimmedTranscript = Transcript(
+            id: transcript.id,
+            text: trimmedText,
+            timestamp: transcript.timestamp
+        )
+        transcriptionEntries.append(TranscriptLogEntry(transcript: trimmedTranscript))
+        if transcriptionEntries.count > 500 {
+            transcriptionEntries.removeFirst(transcriptionEntries.count - 500)
+        }
     }
 
     private func isCurrentSession(_ sessionID: UUID, mode: ActiveMode) -> Bool {

@@ -52,16 +52,23 @@ func coordinatorSerializesInferenceAndReportsWindowDiagnostics() async throws {
     await coordinator.ingest(testAudioChunk(duration: 3, timestamp: 23))
 
     try await eventually {
-        await diagnosticsRecorder.latest.processedWindowCount == 2
+        await diagnosticsRecorder.latest.processedWindowCount == 4
     }
 
     #expect(await engine.maximumConcurrentInferenceCount == 1)
     let latest = await diagnosticsRecorder.latest
     #expect(latest.modelState == .ready)
     #expect(latest.modelID == "fixture/whisper")
-    #expect(latest.windowDuration == 3)
+    #expect(latest.windowDuration == 1.5)
     #expect(latest.inferenceLatency > 0)
-    #expect(await transcriptRecorder.timestamps == [20, 23])
+    let timestamps = await transcriptRecorder.timestamps
+    let expectedTimestamps = [20.0, 21.5, 22.6, 23.7]
+    #expect(timestamps.count == expectedTimestamps.count)
+    #expect(
+        zip(timestamps, expectedTimestamps).allSatisfy { actual, expected in
+            abs(actual - expected) < 0.001
+        }
+    )
     await coordinator.stop()
 }
 
@@ -108,14 +115,14 @@ func silenceAfterHardLimitDoesNotRetranscribeOverlapOnly() async throws {
             await diagnosticsRecorder.append(diagnostics)
         }
     )
-    await coordinator.ingest(testAudioChunk(duration: 3, timestamp: 40))
+    await coordinator.ingest(testAudioChunk(duration: 2.6, timestamp: 40))
 
     try await eventually {
-        await diagnosticsRecorder.latest.processedWindowCount == 1
+        await diagnosticsRecorder.latest.processedWindowCount == 2
     }
     try await Task.sleep(for: .milliseconds(40))
 
-    #expect(await diagnosticsRecorder.latest.processedWindowCount == 1)
+    #expect(await diagnosticsRecorder.latest.processedWindowCount == 2)
     await coordinator.stop()
 }
 
