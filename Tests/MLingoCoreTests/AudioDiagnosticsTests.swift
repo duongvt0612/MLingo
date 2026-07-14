@@ -180,6 +180,25 @@ func coreAudioBatcherCombinesRealtimeCallbacksWithoutDroppingSamples() {
 }
 
 @Test
+func streamingResamplerPreservesContinuousCoreAudioBatches() {
+    let resampler = StreamingMonoResampler(targetSampleRate: 16_000)
+    var outputSamples: [Float] = []
+
+    for batchIndex in 0..<10 {
+        let input = (0..<4_800).map { sampleIndex in
+            let absoluteIndex = batchIndex * 4_800 + sampleIndex
+            return Float(sin(Double(absoluteIndex) * 2 * .pi / 480))
+        }
+        let output = resampler.convert(input, sourceSampleRate: 48_000)
+        #expect(output != nil)
+        outputSamples.append(contentsOf: output ?? [])
+    }
+
+    #expect((15_900...16_100).contains(outputSamples.count))
+    #expect(outputSamples.contains { abs($0) > 0.5 })
+}
+
+@Test
 func diagnosticsStreamDropsStaleSnapshots() async {
     let (stream, continuation) = ScreenCaptureAudioEngine.makeDiagnosticsStream()
 
