@@ -40,7 +40,7 @@ func coordinatorPreservesQuietAudioAroundSpeechWithoutDeferringSilenceFlush() as
             preferredWindowDuration: 1,
             maximumWindowDuration: 2,
             silenceFlushDelay: 0.03,
-            overlapDuration: 0.1
+            overlapDuration: 0.2
         )
     )
 
@@ -92,6 +92,35 @@ func coordinatorPreservesQuietAudioAroundSpeechWithoutDeferringSilenceFlush() as
     #expect(window.samples.first == 0.001)
     #expect(window.samples[Int(0.25 * 16_000)] == 0.05)
     #expect(window.samples.last == 0.001)
+    await coordinator.stop()
+}
+
+@Test
+func coordinatorDoesNotInferContinuousSilence() async throws {
+    let engine = SequencingWhisperEngine()
+    let coordinator = WhisperTranscriptionCoordinator(
+        engine: engine,
+        configuration: .init(silenceFlushDelay: 0.02)
+    )
+    try await coordinator.start(
+        modelID: "fixture/whisper",
+        language: "English",
+        onTranscript: { _ in }
+    )
+
+    for index in 0..<10 {
+        await coordinator.ingest(
+            testAudioChunk(
+                duration: 0.1,
+                timestamp: Double(index) * 0.1,
+                sampleValue: 0,
+                isSpeechLike: false
+            )
+        )
+    }
+    try await Task.sleep(for: .milliseconds(40))
+
+    #expect(await engine.inferenceWindows.isEmpty)
     await coordinator.stop()
 }
 

@@ -2,6 +2,7 @@ import Foundation
 
 @available(macOS 14.2, *)
 public final class CoreAudioTapEngine: AudioEngineProtocol, @unchecked Sendable {
+    private static let vadThreshold: Float = 0.0005
     private let stateQueue = DispatchQueue(label: "com.duongvt.MLingo.core-audio-state")
     private let stateQueueKey = DispatchSpecificKey<Bool>()
     private let processingQueue = DispatchQueue(
@@ -13,9 +14,15 @@ public final class CoreAudioTapEngine: AudioEngineProtocol, @unchecked Sendable 
     private var diagnosticsContinuation: AsyncStream<AudioCaptureDiagnostics>.Continuation?
     private var captureState: AudioCaptureState = .idle
     private var diagnosticsAccumulator = AudioCaptureDiagnosticsAccumulator(
-        backend: .coreAudioTap
+        diagnostics: AudioCaptureDiagnostics(
+            backend: .coreAudioTap,
+            vadThreshold: vadThreshold
+        )
     )
     private var sampleBatcher = CoreAudioSampleBatcher()
+    private let resampler = StreamingMonoResampler(
+        targetSampleRate: AudioPCMNormalizer.targetSampleRate
+    )
 
     public let chunks: AsyncStream<AudioChunk>
     public let diagnostics: AsyncStream<AudioCaptureDiagnostics>
@@ -49,6 +56,7 @@ public final class CoreAudioTapEngine: AudioEngineProtocol, @unchecked Sendable 
         resetDiagnostics(state: .requestingPermission)
         processingQueue.sync {
             sampleBatcher.reset()
+            resampler.reset()
         }
         do {
             try session.start { [weak self] samples, sampleRate, timestamp in
@@ -70,6 +78,7 @@ public final class CoreAudioTapEngine: AudioEngineProtocol, @unchecked Sendable 
         session.stop()
         processingQueue.sync {
             sampleBatcher.reset()
+            resampler.reset()
         }
         updateDiagnostics(state: .stopped)
         chunkContinuation?.finish()
@@ -98,7 +107,7 @@ public final class CoreAudioTapEngine: AudioEngineProtocol, @unchecked Sendable 
             timestamp: timestamp
         )
         for batch in batches {
-            guard let normalizedSamples = AudioPCMNormalizer.resampleMono(
+            guard let normalizedSamples = resampler.convert(
                 batch.samples,
                 sourceSampleRate: batch.sampleRate
             ) else {
@@ -125,26 +134,26 @@ public final class CoreAudioTapEngine: AudioEngineProtocol, @unchecked Sendable 
             return
         }
 
+        let level = AudioLevelAnalyzer.analyze(
+            samples: samples,
+            vadThreshold: Self.vadThreshold
+        )
         let chunk = AudioChunk(
             samples: samples,
             sampleRate: sampleRate,
             channelCount: AudioPCMNormalizer.targetChannelCount,
             timestamp: timestamp,
-            duration: TimeInterval(samples.count) / sampleRate
+            duration: TimeInterval(samples.count) / sampleRate,
+            isSpeechLike: level.isSpeechLike
         )
-        let level = AudioLevelAnalyzer.analyze(samples: samples)
         performOnStateQueue {
             guard captureState == .running else { return }
             _ = diagnosticsAccumulator.recordCapturedChunk(chunk, level: level)
             if level.isSpeechLike {
                 _ = diagnosticsAccumulator.recordSpeechLikeChunk()
-            } else {
-                _ = diagnosticsAccumulator.recordDroppedChunk()
             }
             _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.diagnostics)
-            if level.isSpeechLike {
-                _ = chunkContinuation?.yield(chunk)
-            }
+            _ = chunkContinuation?.yield(chunk)
         }
     }
 

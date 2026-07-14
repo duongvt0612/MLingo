@@ -144,13 +144,16 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
         }
 
         let level = AudioLevelAnalyzer.analyze(samples: chunk.samples)
-        recordCapturedChunk(chunk, level: level)
-
-        guard level.isSpeechLike else {
-            return
-        }
-
-        continuation?.yield(chunk)
+        let classifiedChunk = AudioChunk(
+            samples: chunk.samples,
+            sampleRate: chunk.sampleRate,
+            channelCount: chunk.channelCount,
+            timestamp: chunk.timestamp,
+            duration: chunk.duration,
+            isSpeechLike: level.isSpeechLike
+        )
+        recordCapturedChunk(classifiedChunk, level: level)
+        continuation?.yield(classifiedChunk)
     }
 
     public func stream(_ stream: SCStream, didStopWithError error: Error) {
@@ -267,8 +270,6 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
             _ = diagnosticsAccumulator.recordCapturedChunk(chunk, level: level)
             if level.isSpeechLike {
                 _ = diagnosticsAccumulator.recordSpeechLikeChunk()
-            } else {
-                _ = diagnosticsAccumulator.recordDroppedChunk()
             }
             _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.diagnostics)
         }

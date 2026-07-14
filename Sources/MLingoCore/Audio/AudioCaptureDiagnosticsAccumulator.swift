@@ -13,7 +13,11 @@ public struct AudioCaptureDiagnosticsAccumulator: Sendable {
     }
 
     public mutating func reset(state: AudioCaptureState) -> AudioCaptureDiagnostics {
-        diagnostics = AudioCaptureDiagnostics(backend: diagnostics.backend, state: state)
+        diagnostics = AudioCaptureDiagnostics(
+            backend: diagnostics.backend,
+            vadThreshold: diagnostics.vadThreshold,
+            state: state
+        )
         return diagnostics
     }
 

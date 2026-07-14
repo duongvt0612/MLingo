@@ -29,7 +29,9 @@ private func firstCoreAudioChunk(
     try await withThrowingTaskGroup(of: AudioChunk.self) { group in
         group.addTask {
             for await chunk in stream {
-                return chunk
+                if chunk.isSpeechLike {
+                    return chunk
+                }
             }
             throw MLingoError.captureFailed("Core Audio stream ended before yielding audio")
         }

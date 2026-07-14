@@ -19,6 +19,10 @@ public actor WhisperTranscriptionCoordinator {
     private var processingTask: Task<Void, Never>?
     private var pendingWindows: [AudioChunk] = []
     private var latestProcessedAudioEnd: TimeInterval?
+    private var preRollChunks: [AudioChunk] = []
+    private var preRollDuration: TimeInterval = 0
+    private var hasActiveSpeech = false
+    private var activeSpeechDuration: TimeInterval = 0
 
     public init(engine: WhisperEngineProtocol) {
         let configuration = AdaptiveAudioWindowConfiguration()
@@ -54,6 +58,7 @@ public actor WhisperTranscriptionCoordinator {
         accumulator = AdaptiveAudioWindowAccumulator(configuration: configuration)
         deduplicator.reset()
         latestProcessedAudioEnd = nil
+        resetSpeechSegmentation()
         diagnostics = WhisperDiagnostics(modelState: .loading, modelID: modelID)
         await onDiagnostics(diagnostics)
 
@@ -78,12 +83,26 @@ public actor WhisperTranscriptionCoordinator {
     public func ingest(_ chunk: AudioChunk) {
         guard let sessionID else { return }
 
-        silenceTask?.cancel()
-        let windows = accumulator.append(chunk)
-        for window in windows {
-            enqueue(window, sessionID: sessionID)
+        if chunk.isSpeechLike {
+            silenceTask?.cancel()
+            if !hasActiveSpeech {
+                hasActiveSpeech = true
+                for preRollChunk in preRollChunks {
+                    append(preRollChunk, sessionID: sessionID)
+                }
+                clearPreRoll()
+            }
+            append(chunk, sessionID: sessionID)
+            activeSpeechDuration += chunk.duration
+            scheduleSilenceFlush(sessionID: sessionID)
+        } else if hasActiveSpeech {
+            append(chunk, sessionID: sessionID)
+        } else {
+            retainPreRoll(chunk)
         }
+    }
 
+    private func scheduleSilenceFlush(sessionID: UUID) {
         let delay = configuration.silenceFlushDelay
         silenceTask = Task { [weak self] in
             do {
@@ -105,6 +124,7 @@ public actor WhisperTranscriptionCoordinator {
         accumulator.reset()
         deduplicator.reset()
         latestProcessedAudioEnd = nil
+        resetSpeechSegmentation()
         transcriptHandler = nil
         diagnosticsHandler = nil
         errorHandler = nil
@@ -112,9 +132,65 @@ public actor WhisperTranscriptionCoordinator {
 
     private func flushForSilence(sessionID expectedSessionID: UUID) {
         guard sessionID == expectedSessionID else { return }
-        if let window = accumulator.flushForSilence() {
+        if activeSpeechDuration >= configuration.minimumSpeechDuration,
+           let window = accumulator.flushForSilence()
+        {
             enqueue(window, sessionID: expectedSessionID)
+        } else {
+            accumulator.reset()
         }
+        hasActiveSpeech = false
+        activeSpeechDuration = 0
+    }
+
+    private func append(_ chunk: AudioChunk, sessionID: UUID) {
+        let windows = accumulator.append(chunk)
+        for window in windows {
+            enqueue(window, sessionID: sessionID)
+        }
+    }
+
+    private func retainPreRoll(_ chunk: AudioChunk) {
+        let maximumDuration = configuration.overlapDuration
+        guard maximumDuration > 0 else { return }
+
+        preRollChunks.append(chunk)
+        preRollDuration += chunk.duration
+        while preRollDuration > maximumDuration, let firstChunk = preRollChunks.first {
+            let excessDuration = preRollDuration - maximumDuration
+            if excessDuration >= firstChunk.duration {
+                preRollChunks.removeFirst()
+                preRollDuration -= firstChunk.duration
+                continue
+            }
+
+            let dropSampleCount = min(
+                firstChunk.samples.count,
+                max(1, Int((excessDuration * firstChunk.sampleRate).rounded()))
+            )
+            let retainedSamples = Array(firstChunk.samples.dropFirst(dropSampleCount))
+            let droppedDuration = Double(dropSampleCount) / firstChunk.sampleRate
+            preRollChunks[0] = AudioChunk(
+                samples: retainedSamples,
+                sampleRate: firstChunk.sampleRate,
+                channelCount: firstChunk.channelCount,
+                timestamp: firstChunk.timestamp + droppedDuration,
+                duration: Double(retainedSamples.count) / firstChunk.sampleRate,
+                isSpeechLike: false
+            )
+            preRollDuration -= droppedDuration
+        }
+    }
+
+    private func clearPreRoll() {
+        preRollChunks.removeAll(keepingCapacity: true)
+        preRollDuration = 0
+    }
+
+    private func resetSpeechSegmentation() {
+        clearPreRoll()
+        hasActiveSpeech = false
+        activeSpeechDuration = 0
     }
 
     private func enqueue(_ window: AudioChunk, sessionID expectedSessionID: UUID) {
