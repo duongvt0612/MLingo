@@ -9,7 +9,7 @@ public final class FixtureWhisperEngine: WhisperEngineProtocol, @unchecked Senda
 
     public func loadModel(named modelName: String) async throws {}
 
-    public func transcribe(_ chunk: AudioChunk) async throws -> Transcript? {
+    public func transcribe(_ chunk: AudioChunk, language: String) async throws -> Transcript? {
         guard !transcripts.isEmpty else { return nil }
         return transcripts.removeFirst()
     }

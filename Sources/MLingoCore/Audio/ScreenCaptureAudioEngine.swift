@@ -1,31 +1,60 @@
-import AVFoundation
 import CoreMedia
 import Foundation
 import ScreenCaptureKit
 
 public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
+    private static let targetSampleRate: Double = 16_000
+    private static let targetChannelCount = 1
+    private static let scStreamUserDeclinedCode = -3801
+    private static let scStreamUserStoppedCode = -3817
+
     private let outputQueue = DispatchQueue(label: "com.duongvt.MLingo.audio-output")
+    private let outputQueueKey = DispatchSpecificKey<Bool>()
     private var continuation: AsyncStream<AudioChunk>.Continuation?
+    private var diagnosticsContinuation: AsyncStream<AudioCaptureDiagnostics>.Continuation?
     private var stream: SCStream?
     private var captureState: AudioCaptureState = .idle
+    private var diagnosticsAccumulator = AudioCaptureDiagnosticsAccumulator(
+        backend: .screenCaptureKit
+    )
 
     public let chunks: AsyncStream<AudioChunk>
+    public let diagnostics: AsyncStream<AudioCaptureDiagnostics>
 
     public override init() {
         var capturedContinuation: AsyncStream<AudioChunk>.Continuation?
         chunks = AsyncStream { continuation in
             capturedContinuation = continuation
         }
+        let (diagnostics, diagnosticsContinuation) = Self.makeDiagnosticsStream()
+        self.diagnostics = diagnostics
         continuation = capturedContinuation
+        self.diagnosticsContinuation = diagnosticsContinuation
         super.init()
+        outputQueue.setSpecific(key: outputQueueKey, value: true)
+    }
+
+    static func makeDiagnosticsStream() -> (
+        AsyncStream<AudioCaptureDiagnostics>,
+        AsyncStream<AudioCaptureDiagnostics>.Continuation
+    ) {
+        AsyncStream.makeStream(
+            of: AudioCaptureDiagnostics.self,
+            bufferingPolicy: .bufferingNewest(1)
+        )
     }
 
     public var state: AudioCaptureState {
-        get async { captureState }
+        get async {
+            performOnOutputQueue {
+                captureState
+            }
+        }
     }
 
     public func start() async throws {
-        captureState = .requestingPermission
+        MLingoLogger.audio.info("Starting ScreenCaptureKit audio capture")
+        resetDiagnostics(state: .requestingPermission)
 
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(
@@ -34,7 +63,6 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
             )
 
             guard let display = content.displays.first else {
-                captureState = .failed(MLingoError.noAudioSource.localizedDescription)
                 throw MLingoError.noAudioSource
             }
 
@@ -45,40 +73,53 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
             configuration.minimumFrameInterval = CMTime(value: 1, timescale: 2)
             configuration.capturesAudio = true
             configuration.excludesCurrentProcessAudio = true
-            configuration.sampleRate = 16_000
-            configuration.channelCount = 1
+            configuration.sampleRate = Int(Self.targetSampleRate)
+            configuration.channelCount = Self.targetChannelCount
 
             let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
             try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: outputQueue)
             try await stream.startCapture()
 
-            self.stream = stream
-            captureState = .running
-        } catch {
-            let message = error.localizedDescription
-            captureState = .failed(message)
-            if message.localizedCaseInsensitiveContains("permission") {
-                throw MLingoError.permissionDenied("Allow Screen Recording for MLingo in System Settings, then restart capture.")
+            performOnOutputQueue {
+                self.stream = stream
+                captureState = .running
+                _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.update(state: .running))
             }
-            throw MLingoError.captureFailed(message)
+            MLingoLogger.audio.info("ScreenCaptureKit audio capture started with display size \(display.width, privacy: .public)x\(display.height, privacy: .public)")
+        } catch {
+            let mappedError = Self.mapStartError(error)
+            let message = mappedError.localizedDescription
+            updateDiagnostics(state: .failed(message))
+            MLingoLogger.audio.error("ScreenCaptureKit audio capture failed: \(error.localizedDescription, privacy: .public)")
+            throw mappedError
         }
     }
 
     public func stop() async {
-        guard let stream else {
-            captureState = .stopped
+        let currentStream = performOnOutputQueue {
+            stream
+        }
+
+        guard let currentStream else {
+            updateDiagnostics(state: .stopped)
+            MLingoLogger.audio.debug("Stop requested while audio capture is not running")
             return
         }
 
         do {
-            try await stream.stopCapture()
+            try await currentStream.stopCapture()
         } catch {
-            captureState = .failed(error.localizedDescription)
+            updateDiagnostics(state: .failed(error.localizedDescription))
+            MLingoLogger.audio.error("Stopping ScreenCaptureKit audio capture failed: \(error.localizedDescription, privacy: .public)")
             return
         }
 
-        self.stream = nil
-        captureState = .stopped
+        performOnOutputQueue {
+            self.stream = nil
+            captureState = .stopped
+            _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.update(state: .stopped))
+        }
+        MLingoLogger.audio.info("ScreenCaptureKit audio capture stopped")
     }
 
     public func stream(
@@ -91,25 +132,57 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
         }
 
         guard let chunk = Self.makeChunk(from: sampleBuffer) else {
+            recordDroppedChunk()
             return
         }
 
-        continuation?.yield(chunk)
+        guard !chunk.samples.isEmpty else {
+            recordEmptyChunk()
+            return
+        }
+
+        let level = AudioLevelAnalyzer.analyze(samples: chunk.samples)
+        let classifiedChunk = AudioChunk(
+            samples: chunk.samples,
+            sampleRate: chunk.sampleRate,
+            channelCount: chunk.channelCount,
+            timestamp: chunk.timestamp,
+            duration: chunk.duration,
+            isSpeechLike: level.isSpeechLike
+        )
+        recordCapturedChunk(classifiedChunk, level: level)
+        continuation?.yield(classifiedChunk)
     }
 
     public func stream(_ stream: SCStream, didStopWithError error: Error) {
-        captureState = .failed(error.localizedDescription)
-        continuation?.finish()
+        guard !Self.isScreenCaptureKitError(error, code: Self.scStreamUserStoppedCode) else {
+            performOnOutputQueue {
+                self.stream = nil
+                captureState = .stopped
+                _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.update(state: .stopped))
+            }
+            MLingoLogger.audio.debug("ScreenCaptureKit stream stopped by user")
+            return
+        }
+
+        let failedState = AudioCaptureState.failed(error.localizedDescription)
+        performOnOutputQueue {
+            self.stream = nil
+            captureState = failedState
+            _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.update(state: failedState))
+        }
+        MLingoLogger.audio.error("ScreenCaptureKit stream stopped with error: \(error.localizedDescription, privacy: .public)")
     }
 
     private static func makeChunk(from sampleBuffer: CMSampleBuffer) -> AudioChunk? {
         guard
             let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
-            let streamDescription = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)
+            let streamDescriptionPointer = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)
         else {
             return nil
         }
 
+        let streamDescription = streamDescriptionPointer.pointee
         var audioBufferList = AudioBufferList()
         var blockBuffer: CMBlockBuffer?
         let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
@@ -123,22 +196,99 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
             blockBufferOut: &blockBuffer
         )
 
-        guard status == noErr, let data = audioBufferList.mBuffers.mData else {
+        guard status == noErr, audioBufferList.mBuffers.mData != nil else {
             return nil
         }
 
-        let frameCount = Int(audioBufferList.mBuffers.mDataByteSize) / MemoryLayout<Float>.size
-        let pointer = data.bindMemory(to: Float.self, capacity: frameCount)
-        let samples = Array(UnsafeBufferPointer(start: pointer, count: frameCount))
+        let normalizedSamples = withUnsafePointer(to: &audioBufferList) {
+            AudioPCMNormalizer.normalize(
+                bufferList: $0,
+                streamDescription: streamDescription
+            )
+        }
+        guard let normalizedSamples else {
+            MLingoLogger.audio.error("Audio normalization returned no samples; dropping chunk")
+            return nil
+        }
+        guard !normalizedSamples.isEmpty else {
+            return AudioChunk(
+                samples: [],
+                sampleRate: Self.targetSampleRate,
+                channelCount: Self.targetChannelCount,
+                timestamp: sampleBuffer.presentationTimeStamp.seconds,
+                duration: sampleBuffer.duration.isValid ? sampleBuffer.duration.seconds : 0
+            )
+        }
+
         let timestamp = sampleBuffer.presentationTimeStamp.seconds
         let duration = sampleBuffer.duration.isValid ? sampleBuffer.duration.seconds : 0
 
         return AudioChunk(
-            samples: samples,
-            sampleRate: streamDescription.pointee.mSampleRate,
-            channelCount: Int(streamDescription.pointee.mChannelsPerFrame),
+            samples: normalizedSamples,
+            sampleRate: Self.targetSampleRate,
+            channelCount: Self.targetChannelCount,
             timestamp: timestamp,
             duration: duration
         )
+    }
+
+    private static func mapStartError(_ error: Error) -> MLingoError {
+        if let mlingoError = error as? MLingoError {
+            return mlingoError
+        }
+
+        if isScreenCaptureKitError(error, code: scStreamUserDeclinedCode) {
+            return .permissionDenied("Cấp quyền Screen Recording cho MLingo trong System Settings > Privacy & Security > Screen Recording, rồi restart capture.")
+        }
+
+        return .captureFailed(error.localizedDescription)
+    }
+
+    private static func isScreenCaptureKitError(_ error: Error, code: Int) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == SCStreamErrorDomain && nsError.code == code
+    }
+
+    private func resetDiagnostics(state: AudioCaptureState) {
+        performOnOutputQueue {
+            captureState = state
+            _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.reset(state: state))
+        }
+    }
+
+    private func updateDiagnostics(state: AudioCaptureState) {
+        performOnOutputQueue {
+            captureState = state
+            _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.update(state: state))
+        }
+    }
+
+    private func recordCapturedChunk(_ chunk: AudioChunk, level: AudioLevel) {
+        performOnOutputQueue {
+            _ = diagnosticsAccumulator.recordCapturedChunk(chunk, level: level)
+            if level.isSpeechLike {
+                _ = diagnosticsAccumulator.recordSpeechLikeChunk()
+            }
+            _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.diagnostics)
+        }
+    }
+
+    private func recordDroppedChunk() {
+        performOnOutputQueue {
+            _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.recordDroppedChunk())
+        }
+    }
+
+    private func recordEmptyChunk() {
+        performOnOutputQueue {
+            _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.recordEmptyChunk())
+        }
+    }
+
+    private func performOnOutputQueue<T>(_ operation: () -> T) -> T {
+        if DispatchQueue.getSpecific(key: outputQueueKey) == true {
+            return operation()
+        }
+        return outputQueue.sync(execute: operation)
     }
 }

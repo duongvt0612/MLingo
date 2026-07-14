@@ -19,7 +19,13 @@ public final class UserDefaultsSettingsStore: SettingsStoreProtocol, @unchecked 
             return AppSettings()
         }
 
-        return try decoder.decode(AppSettings.self, from: data)
+        var settings = try decoder.decode(AppSettings.self, from: data)
+        if settings.whisperModel == "mlx-community/whisper-small" {
+            settings.whisperModel = "mlx-community/whisper-small-mlx"
+            defaults.set(try encoder.encode(settings), forKey: key)
+        }
+
+        return settings
     }
 
     public func save(_ settings: AppSettings) async throws {
