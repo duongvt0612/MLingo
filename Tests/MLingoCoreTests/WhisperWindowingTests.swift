@@ -109,7 +109,8 @@ func transcriptDeduplicatorTrimsWindowOverlap() throws {
     _ = deduplicator.process(Transcript(text: "Welcome to the live stream", timestamp: 1))
 
     let processedNext = deduplicator.process(
-        Transcript(text: "the live stream today we discuss Swift", timestamp: 2)
+        Transcript(text: "the live stream today we discuss Swift", timestamp: 2),
+        audioOverlapDuration: 0.4
     )
     let next = try #require(processedNext)
 
@@ -123,12 +124,62 @@ func transcriptDeduplicatorMapsNormalizedOverlapBackToRawTokens() throws {
     _ = deduplicator.process(Transcript(text: "Welcome to the live stream", timestamp: 1))
 
     let processedNext = deduplicator.process(
-        Transcript(text: "the ... live stream — today", timestamp: 2)
+        Transcript(text: "the ... live stream — today", timestamp: 2),
+        audioOverlapDuration: 0.4
     )
     let next = try #require(processedNext)
 
     #expect(next.text == "— today")
     #expect(next.timestamp == 2)
+}
+
+@Test
+func transcriptDeduplicatorTrimsFuzzyOverlapFromOverlappingAudio() throws {
+    var deduplicator = TranscriptDeduplicator()
+    _ = deduplicator.process(
+        Transcript(text: "We need a very reliable transcript", timestamp: 1)
+    )
+
+    let processedNext = deduplicator.process(
+        Transcript(
+            text: "a really reliable transcript before translation starts",
+            timestamp: 2
+        ),
+        audioOverlapDuration: 0.4
+    )
+    let next = try #require(processedNext)
+
+    #expect(next.text == "before translation starts")
+}
+
+@Test
+func transcriptDeduplicatorTrimsSingleRepeatedTokenOnlyForOverlappingAudio() throws {
+    var deduplicator = TranscriptDeduplicator()
+    _ = deduplicator.process(Transcript(text: "Please continue", timestamp: 1))
+
+    let processedNext = deduplicator.process(
+        Transcript(text: "continue with the next point", timestamp: 2),
+        audioOverlapDuration: 0.4
+    )
+    let next = try #require(processedNext)
+
+    #expect(next.text == "with the next point")
+}
+
+@Test
+func transcriptDeduplicatorPreservesRepeatedSpeechWithoutAudioOverlap() throws {
+    var deduplicator = TranscriptDeduplicator()
+    _ = deduplicator.process(
+        Transcript(text: "The speaker said we should continue", timestamp: 1)
+    )
+
+    let processedNext = deduplicator.process(
+        Transcript(text: "we should continue because this is important", timestamp: 2),
+        audioOverlapDuration: 0
+    )
+    let next = try #require(processedNext)
+
+    #expect(next.text == "we should continue because this is important")
 }
 
 private func chunk(

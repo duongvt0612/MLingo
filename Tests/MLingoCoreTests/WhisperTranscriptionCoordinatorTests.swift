@@ -275,6 +275,43 @@ func silenceAfterHardLimitDoesNotRetranscribeOverlapOnly() async throws {
     await coordinator.stop()
 }
 
+@Test
+func coordinatorStitchesFuzzyOverlapBeforeEmittingTranscript() async throws {
+    let engine = ScriptedWhisperEngine(texts: [
+        "We need a very reliable transcript",
+        "a really reliable transcript before translation starts",
+    ])
+    let recorder = TranscriptRecorder()
+    let coordinator = WhisperTranscriptionCoordinator(
+        engine: engine,
+        configuration: .init(
+            minimumSpeechDuration: 0.1,
+            preferredWindowDuration: 1,
+            maximumWindowDuration: 1,
+            silenceFlushDelay: 10,
+            overlapDuration: 0.4
+        )
+    )
+
+    try await coordinator.start(
+        modelID: "fixture/whisper",
+        language: "English",
+        onTranscript: { transcript in
+            await recorder.append(transcript)
+        }
+    )
+    await coordinator.ingest(testAudioChunk(duration: 1, timestamp: 0))
+    try await eventually { await recorder.count == 1 }
+    await coordinator.ingest(testAudioChunk(duration: 0.6, timestamp: 1))
+    try await eventually { await recorder.count == 2 }
+
+    #expect(await recorder.texts == [
+        "We need a very reliable transcript",
+        "before translation starts",
+    ])
+    await coordinator.stop()
+}
+
 private actor SequencingWhisperEngine: WhisperEngineProtocol {
     private let inferenceDelay: Duration
     private var inferenceCount = 0
@@ -329,12 +366,28 @@ private actor BlockingWhisperEngine: WhisperEngineProtocol {
     }
 }
 
+private actor ScriptedWhisperEngine: WhisperEngineProtocol {
+    private var texts: [String]
+
+    init(texts: [String]) {
+        self.texts = texts
+    }
+
+    func loadModel(named modelName: String) async throws {}
+
+    func transcribe(_ chunk: AudioChunk, language: String) async throws -> Transcript? {
+        guard !texts.isEmpty else { return nil }
+        return Transcript(text: texts.removeFirst(), timestamp: chunk.timestamp)
+    }
+}
+
 private actor TranscriptRecorder {
     private var values: [Transcript] = []
 
     var count: Int { values.count }
     var first: Transcript? { values.first }
     var timestamps: [TimeInterval] { values.map(\.timestamp) }
+    var texts: [String] { values.map(\.text) }
 
     func append(_ transcript: Transcript) {
         values.append(transcript)
