@@ -30,7 +30,7 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
         case .permissionDenied(let message):
             message
         case .systemAudioPermissionDenied:
-            "Cấp quyền System Audio Recording cho MLingo trong System Settings > Privacy & Security > Screen & System Audio Recording, rồi thử lại."
+            "Allow System Audio Recording for MLingo in System Settings > Privacy & Security > Screen & System Audio Recording, then try again."
         case .coreAudioHALFailure(let operation, let status):
             "Core Audio failed during \(operation) (OSStatus \(status))."
         case .noAudioSource:

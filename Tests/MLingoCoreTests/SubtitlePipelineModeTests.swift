@@ -65,6 +65,27 @@ func pipelineUsesCaptureBackendFromSettings() async {
 }
 
 @Test @MainActor
+func pipelineReportsAudioStartupFailure() async {
+    let audio = PipelineAudioEngine(startError: MLingoError.noAudioSource)
+    let errors = PipelineMessageRecorder()
+    let pipeline = SubtitlePipeline(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: PipelineWhisperEngine(text: "unused"),
+        translationEngine: PipelineTranslationEngine(),
+        overlayEngine: PipelineOverlayEngine(),
+        settingsStore: PipelineSettingsStore()
+    )
+
+    let started = await pipeline.start(
+        mode: .transcriptionOnly,
+        onError: { errors.append($0) }
+    )
+
+    #expect(!started)
+    #expect(errors.latest == MLingoError.noAudioSource.localizedDescription)
+}
+
+@Test @MainActor
 func translationModePreservesTranslationAndOverlayFlow() async throws {
     let audio = PipelineAudioEngine()
     let whisper = PipelineWhisperEngine(text: "Translate this")
@@ -418,10 +439,11 @@ private final class PipelineAudioEngine: AudioEngineProtocol, @unchecked Sendabl
     let diagnostics: AsyncStream<AudioCaptureDiagnostics>
     private let chunkContinuation: AsyncStream<AudioChunk>.Continuation
     private let diagnosticsContinuation: AsyncStream<AudioCaptureDiagnostics>.Continuation
+    private let startError: MLingoError?
     private(set) var startCount = 0
     private(set) var stopCount = 0
 
-    init() {
+    init(startError: MLingoError? = nil) {
         let (chunks, chunkContinuation) = AsyncStream.makeStream(of: AudioChunk.self)
         let (diagnostics, diagnosticsContinuation) = AsyncStream.makeStream(
             of: AudioCaptureDiagnostics.self,
@@ -431,11 +453,15 @@ private final class PipelineAudioEngine: AudioEngineProtocol, @unchecked Sendabl
         self.diagnostics = diagnostics
         self.chunkContinuation = chunkContinuation
         self.diagnosticsContinuation = diagnosticsContinuation
+        self.startError = startError
     }
 
     var state: AudioCaptureState { get async { .running } }
 
-    func start() async throws { startCount += 1 }
+    func start() async throws {
+        startCount += 1
+        if let startError { throw startError }
+    }
     func stop() async { stopCount += 1 }
 
     func yield(_ chunk: AudioChunk) {

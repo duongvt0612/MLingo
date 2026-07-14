@@ -1,5 +1,9 @@
 import Foundation
 
+private enum WhisperCoordinatorTaskContext {
+    @TaskLocal static var processingSessionID: UUID?
+}
+
 public actor WhisperTranscriptionCoordinator {
     public typealias TranscriptHandler = @Sendable (Transcript) async -> Void
     public typealias DiagnosticsHandler = @Sendable (WhisperDiagnostics) async -> Void
@@ -7,6 +11,7 @@ public actor WhisperTranscriptionCoordinator {
 
     private let engine: WhisperEngineProtocol
     private let configuration: AdaptiveAudioWindowConfiguration
+    private let maximumPendingWindowDuration: TimeInterval
     private var accumulator: AdaptiveAudioWindowAccumulator
     private var deduplicator = TranscriptDeduplicator()
     private var diagnostics = WhisperDiagnostics()
@@ -17,6 +22,7 @@ public actor WhisperTranscriptionCoordinator {
     private var diagnosticsHandler: DiagnosticsHandler?
     private var errorHandler: ErrorHandler?
     private var silenceTask: Task<Void, Never>?
+    private var modelLoadingTask: Task<Void, Error>?
     private var processingTask: Task<Void, Never>?
     private var pendingWindows: [AudioChunk] = []
     private var latestProcessedAudioEnd: TimeInterval?
@@ -24,20 +30,27 @@ public actor WhisperTranscriptionCoordinator {
     private var preRollDuration: TimeInterval = 0
     private var hasActiveSpeech = false
     private var activeSpeechDuration: TimeInterval = 0
+    private var latestStartRequestID: UUID?
 
     public init(engine: WhisperEngineProtocol) {
         let configuration = AdaptiveAudioWindowConfiguration()
         self.engine = engine
         self.configuration = configuration
+        maximumPendingWindowDuration = configuration.maximumWindowDuration * 3
         accumulator = AdaptiveAudioWindowAccumulator(configuration: configuration)
     }
 
     init(
         engine: WhisperEngineProtocol,
-        configuration: AdaptiveAudioWindowConfiguration
+        configuration: AdaptiveAudioWindowConfiguration,
+        maximumPendingWindowDuration: TimeInterval? = nil
     ) {
+        let pendingDuration = maximumPendingWindowDuration
+            ?? configuration.maximumWindowDuration * 3
+        precondition(pendingDuration >= configuration.maximumWindowDuration)
         self.engine = engine
         self.configuration = configuration
+        self.maximumPendingWindowDuration = pendingDuration
         accumulator = AdaptiveAudioWindowAccumulator(configuration: configuration)
     }
 
@@ -48,7 +61,10 @@ public actor WhisperTranscriptionCoordinator {
         onDiagnostics: @escaping DiagnosticsHandler = { _ in },
         onError: @escaping ErrorHandler = { _ in }
     ) async throws {
-        stop()
+        let startRequestID = UUID()
+        latestStartRequestID = startRequestID
+        await stopCurrentSession()
+        guard latestStartRequestID == startRequestID else { throw CancellationError() }
 
         let newSessionID = UUID()
         sessionID = newSessionID
@@ -63,12 +79,27 @@ public actor WhisperTranscriptionCoordinator {
         resetSpeechSegmentation()
         diagnostics = WhisperDiagnostics(modelState: .loading, modelID: modelID)
         await onDiagnostics(diagnostics)
+        guard sessionID == newSessionID,
+              latestStartRequestID == startRequestID,
+              !Task.isCancelled
+        else {
+            throw CancellationError()
+        }
+
+        let loadingTask = Task { [engine] in
+            try await engine.loadModel(named: modelID)
+        }
+        modelLoadingTask = loadingTask
 
         do {
-            try await engine.loadModel(named: modelID)
+            try await loadingTask.value
+            if sessionID == newSessionID {
+                modelLoadingTask = nil
+            }
         } catch is CancellationError {
             if sessionID == newSessionID {
-                stop()
+                latestStartRequestID = nil
+                await stopCurrentSession()
             }
             throw CancellationError()
         } catch {
@@ -76,14 +107,26 @@ public actor WhisperTranscriptionCoordinator {
             diagnostics.modelState = .failed(error.localizedDescription)
             await onDiagnostics(diagnostics)
             guard sessionID == newSessionID else { throw CancellationError() }
-            stop()
+            latestStartRequestID = nil
+            await stopCurrentSession()
             throw error
         }
 
-        guard sessionID == newSessionID else { throw CancellationError() }
+        guard sessionID == newSessionID,
+              latestStartRequestID == startRequestID,
+              !Task.isCancelled
+        else {
+            throw CancellationError()
+        }
         acceptingAudio = true
         diagnostics.modelState = .ready
         await onDiagnostics(diagnostics)
+        guard sessionID == newSessionID,
+              latestStartRequestID == startRequestID,
+              !Task.isCancelled
+        else {
+            throw CancellationError()
+        }
     }
 
     public func ingest(_ chunk: AudioChunk) {
@@ -125,13 +168,36 @@ public actor WhisperTranscriptionCoordinator {
         }
     }
 
-    public func stop() {
+    public func stop() async {
+        latestStartRequestID = nil
+        await stopCurrentSession()
+    }
+
+    private func stopCurrentSession() async {
+        let stoppedSessionID = sessionID
         acceptingAudio = false
         sessionID = nil
         silenceTask?.cancel()
         silenceTask = nil
-        processingTask?.cancel()
+        let loadingTask = modelLoadingTask
+        modelLoadingTask = nil
+        loadingTask?.cancel()
+        let inferenceTask = processingTask
         processingTask = nil
+        let isCurrentInferenceTask = WhisperCoordinatorTaskContext.processingSessionID
+            == stoppedSessionID
+        if !isCurrentInferenceTask {
+            inferenceTask?.cancel()
+        }
+
+        if let loadingTask {
+            _ = await loadingTask.result
+        }
+        if !isCurrentInferenceTask {
+            await inferenceTask?.value
+        }
+
+        guard sessionID == nil else { return }
         pendingWindows.removeAll(keepingCapacity: true)
         accumulator.reset()
         deduplicator.reset()
@@ -215,10 +281,14 @@ public actor WhisperTranscriptionCoordinator {
 
         if processingTask == nil {
             processingTask = Task { [weak self] in
-                await self?.processWindows(
-                    startingWith: window,
-                    sessionID: expectedSessionID
-                )
+                await WhisperCoordinatorTaskContext.$processingSessionID.withValue(
+                    expectedSessionID
+                ) {
+                    await self?.processWindows(
+                        startingWith: window,
+                        sessionID: expectedSessionID
+                    )
+                }
             }
             return
         }
@@ -232,8 +302,24 @@ public actor WhisperTranscriptionCoordinator {
         {
             pendingWindows[pendingWindows.count - 1] = coalescedWindow
         } else {
-            pendingWindows.append(window)
+            appendPendingWindow(window)
         }
+    }
+
+    private func appendPendingWindow(_ window: AudioChunk) {
+        while !pendingWindows.isEmpty,
+              pendingWindows.reduce(0, { $0 + $1.duration }) + window.duration
+                > maximumPendingWindowDuration
+        {
+            pendingWindows.removeFirst()
+            diagnostics.droppedBacklogWindowCount += 1
+        }
+
+        guard window.duration <= maximumPendingWindowDuration else {
+            diagnostics.droppedBacklogWindowCount += 1
+            return
+        }
+        pendingWindows.append(window)
     }
 
     private func processWindows(
@@ -258,7 +344,7 @@ public actor WhisperTranscriptionCoordinator {
         }
     }
 
-    private static func coalesceWithoutDropping(
+    static func coalesceWithoutDropping(
         _ older: AudioChunk,
         with newer: AudioChunk,
         maximumDuration: TimeInterval
@@ -273,24 +359,51 @@ public actor WhisperTranscriptionCoordinator {
 
         let sampleRate = older.sampleRate
         let olderEnd = older.timestamp + older.duration
+        let maximumSampleCount = max(1, Int((maximumDuration * sampleRate).rounded()))
+        guard olderEnd.isFinite,
+              newer.timestamp.isFinite,
+              older.samples.count <= maximumSampleCount
+        else {
+            return nil
+        }
         var combinedSamples = older.samples
+        var remainingCapacity = maximumSampleCount - combinedSamples.count
 
         if newer.timestamp >= olderEnd {
-            let gapSampleCount = Int(((newer.timestamp - olderEnd) * sampleRate).rounded())
+            let gapSamples = ((newer.timestamp - olderEnd) * sampleRate).rounded()
+            guard gapSamples.isFinite,
+                  gapSamples >= 0,
+                  gapSamples <= Double(remainingCapacity)
+            else {
+                return nil
+            }
+            let gapSampleCount = Int(gapSamples)
+            guard newer.samples.count <= remainingCapacity - gapSampleCount else {
+                return nil
+            }
             if gapSampleCount > 0 {
                 combinedSamples.append(contentsOf: repeatElement(0, count: gapSampleCount))
             }
             combinedSamples.append(contentsOf: newer.samples)
         } else {
+            let overlapSamples = ((olderEnd - newer.timestamp) * sampleRate).rounded()
+            guard overlapSamples.isFinite,
+                  overlapSamples >= 0,
+                  overlapSamples <= Double(Int.max)
+            else {
+                return nil
+            }
             let overlapSampleCount = min(
                 newer.samples.count,
-                max(0, Int(((olderEnd - newer.timestamp) * sampleRate).rounded()))
+                Int(overlapSamples)
             )
-            combinedSamples.append(contentsOf: newer.samples.dropFirst(overlapSampleCount))
+            let nonOverlappingSamples = newer.samples.dropFirst(overlapSampleCount)
+            guard nonOverlappingSamples.count <= remainingCapacity else { return nil }
+            combinedSamples.append(contentsOf: nonOverlappingSamples)
         }
 
-        let maximumSampleCount = max(1, Int((maximumDuration * sampleRate).rounded()))
-        guard combinedSamples.count <= maximumSampleCount else { return nil }
+        remainingCapacity = maximumSampleCount - combinedSamples.count
+        guard remainingCapacity >= 0 else { return nil }
 
         let duration = Double(combinedSamples.count) / sampleRate
         let combinedEnd = max(olderEnd, newer.timestamp + newer.duration)
@@ -339,6 +452,7 @@ public actor WhisperTranscriptionCoordinator {
                     diagnostics.lastTranscript = emittedTranscript.text
                     if let transcriptHandler {
                         await transcriptHandler(emittedTranscript)
+                        guard sessionID == expectedSessionID, !Task.isCancelled else { return }
                     }
                 }
             }
@@ -349,6 +463,7 @@ public actor WhisperTranscriptionCoordinator {
 
             if let diagnosticsHandler {
                 await diagnosticsHandler(diagnostics)
+                guard sessionID == expectedSessionID, !Task.isCancelled else { return }
             }
         } catch is CancellationError {
             return
@@ -357,9 +472,11 @@ public actor WhisperTranscriptionCoordinator {
             diagnostics.modelState = .failed(error.localizedDescription)
             if let diagnosticsHandler {
                 await diagnosticsHandler(diagnostics)
+                guard sessionID == expectedSessionID, !Task.isCancelled else { return }
             }
             if let errorHandler {
                 await errorHandler(error.localizedDescription)
+                guard sessionID == expectedSessionID, !Task.isCancelled else { return }
             }
         }
     }

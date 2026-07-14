@@ -34,7 +34,8 @@ struct TranscriptDeduplicator: Sendable {
         }
         let normalizedTokens = indexedNormalizedTokens.map(\.token)
 
-        if let previousNormalizedText,
+        if audioOverlapDuration > 0,
+           let previousNormalizedText,
            Self.similarity(previousNormalizedText, normalizedText) >= similarityThreshold {
             suppressedCount += 1
             return nil

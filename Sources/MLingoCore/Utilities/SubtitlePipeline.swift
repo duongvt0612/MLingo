@@ -44,6 +44,7 @@ public final class SubtitlePipeline {
         transcriptionCoordinator = WhisperTranscriptionCoordinator(engine: whisperEngine)
     }
 
+    @discardableResult
     public func start(
         mode: SubtitlePipelineMode = .translation,
         onError: @escaping @Sendable (String) -> Void,
@@ -51,7 +52,7 @@ public final class SubtitlePipeline {
         onAudioDiagnostics: (@Sendable (AudioCaptureDiagnostics) async -> Void)? = nil,
         onTranscript: @escaping TranscriptHandler = { _ in },
         onWhisperDiagnostics: @escaping WhisperDiagnosticsHandler = { _ in }
-    ) async {
+    ) async -> Bool {
         MLingoLogger.pipeline.info("Starting subtitle pipeline")
         await stop()
 
@@ -86,7 +87,7 @@ public final class SubtitlePipeline {
                     )
                 }
             )
-            guard sessionID == newSessionID else { return }
+            guard sessionID == newSessionID else { return false }
 
             let audioEngine = audioEngineFactory.makeAudioEngine(
                 preferredBackend: settings.audioCaptureBackend
@@ -95,7 +96,7 @@ public final class SubtitlePipeline {
             try await audioEngine.start()
             guard sessionID == newSessionID else {
                 await audioEngine.stop()
-                return
+                return false
             }
 
             if mode == .translation {
@@ -122,15 +123,20 @@ public final class SubtitlePipeline {
                     await coordinator.ingest(chunk)
                 }
             }
+            return true
         } catch is CancellationError {
-            return
+            if sessionID == newSessionID {
+                await stop()
+            }
+            return false
         } catch {
-            guard sessionID == newSessionID else { return }
+            guard sessionID == newSessionID else { return false }
             MLingoLogger.pipeline.error(
                 "Subtitle pipeline failed to start: \(error.localizedDescription, privacy: .public)"
             )
             onError(error.localizedDescription)
             await stop()
+            return false
         }
     }
 
@@ -172,7 +178,12 @@ public final class SubtitlePipeline {
     ) async {
         guard sessionID == expectedSessionID else { return }
         await onTranscript(transcript)
-        guard mode == .translation, !translationPaused else { return }
+        guard sessionID == expectedSessionID,
+              mode == .translation,
+              !translationPaused
+        else {
+            return
+        }
 
         enqueueTranslation(
             transcript,

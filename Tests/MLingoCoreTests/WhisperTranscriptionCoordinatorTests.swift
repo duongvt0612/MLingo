@@ -123,6 +123,60 @@ func coordinatorRejectsAudioUntilModelFinishesLoading() async throws {
 }
 
 @Test
+func coordinatorRevalidatesSessionAfterLoadingDiagnosticsCallback() async {
+    let engine = CountingLoadWhisperEngine()
+    let coordinator = WhisperTranscriptionCoordinator(engine: engine)
+
+    await #expect(throws: CancellationError.self) {
+        try await coordinator.start(
+            modelID: "fixture/whisper",
+            language: "English",
+            onTranscript: { _ in },
+            onDiagnostics: { diagnostics in
+                if diagnostics.modelState == .loading {
+                    await coordinator.stop()
+                }
+            }
+        )
+    }
+
+    #expect(await engine.loadCount == 0)
+}
+
+@Test
+func coordinatorStopWaitsForOwnedModelLoadingTask() async throws {
+    let engine = BlockingLoadWhisperEngine()
+    let coordinator = WhisperTranscriptionCoordinator(engine: engine)
+    let stopped = AsyncFlag()
+    let startTask = Task {
+        try await coordinator.start(
+            modelID: "fixture/whisper",
+            language: "English",
+            onTranscript: { _ in }
+        )
+    }
+
+    try await eventually { await engine.hasPendingLoad }
+    let stopTask = Task {
+        await coordinator.stop()
+        await stopped.set()
+    }
+    try await Task.sleep(for: .milliseconds(20))
+    #expect(!(await stopped.value))
+
+    await engine.completeLoad()
+    await stopTask.value
+    do {
+        try await startTask.value
+        Issue.record("Expected the cancelled model load to abort startup")
+    } catch is CancellationError {
+        // Expected.
+    } catch {
+        Issue.record("Expected CancellationError, received \(error)")
+    }
+}
+
+@Test
 func coordinatorDoesNotAcceptAudioAfterModelLoadFailure() async throws {
     let engine = FailingLoadWhisperEngine()
     let coordinator = WhisperTranscriptionCoordinator(engine: engine)
@@ -301,11 +355,121 @@ func coordinatorStopSuppressesCallbacksFromPreviousSession() async throws {
         await engine.hasPendingInference
     }
 
-    await coordinator.stop()
+    let stopTask = Task { await coordinator.stop() }
+    try await eventually {
+        await engine.hasCancelledInference
+    }
     await engine.completePendingInference(text: "stale transcript")
+    await stopTask.value
     try await Task.sleep(for: .milliseconds(20))
 
     #expect(await recorder.count == 0)
+}
+
+@Test
+func coordinatorStopWaitsForOwnedInferenceTask() async throws {
+    let engine = BlockingWhisperEngine()
+    let coordinator = WhisperTranscriptionCoordinator(engine: engine)
+    let stopped = AsyncFlag()
+
+    try await coordinator.start(
+        modelID: "fixture/whisper",
+        language: "English",
+        onTranscript: { _ in }
+    )
+    await coordinator.ingest(testAudioChunk(duration: 3, timestamp: 0))
+    try await eventually { await engine.hasPendingInference }
+
+    let stopTask = Task {
+        await coordinator.stop()
+        await stopped.set()
+    }
+    try await Task.sleep(for: .milliseconds(20))
+    #expect(!(await stopped.value))
+
+    await engine.completePendingInference(text: "cancelled")
+    await stopTask.value
+    #expect(await stopped.value)
+}
+
+@Test
+func coordinatorBoundsPendingWindowBacklog() async throws {
+    let engine = BlockingWhisperEngine()
+    let diagnosticsRecorder = DiagnosticsRecorder()
+    let coordinator = WhisperTranscriptionCoordinator(
+        engine: engine,
+        configuration: .init(
+            preferredWindowDuration: 3,
+            maximumWindowDuration: 3,
+            silenceFlushDelay: 10,
+            overlapDuration: 0
+        ),
+        maximumPendingWindowDuration: 3
+    )
+
+    try await coordinator.start(
+        modelID: "fixture/whisper",
+        language: "English",
+        onTranscript: { _ in },
+        onDiagnostics: { await diagnosticsRecorder.append($0) }
+    )
+    await coordinator.ingest(testAudioChunk(duration: 3, timestamp: 0))
+    try await eventually { await engine.hasPendingInference }
+    await coordinator.ingest(testAudioChunk(duration: 9, timestamp: 3))
+
+    await engine.completePendingInference(text: "first")
+    try await eventually { await engine.inferenceWindows.count == 2 }
+
+    let windows = await engine.inferenceWindows
+    #expect(windows[1].timestamp == 9)
+    #expect(await diagnosticsRecorder.latest.droppedBacklogWindowCount == 2)
+
+    let stopTask = Task { await coordinator.stop() }
+    await engine.completePendingInference(text: "cancelled")
+    await stopTask.value
+}
+
+@Test
+func coordinatorRejectsUnrepresentableCoalescingGap() {
+    let older = testAudioChunk(duration: 1, timestamp: 0)
+    let newer = testAudioChunk(duration: 1, timestamp: .greatestFiniteMagnitude)
+
+    #expect(
+        WhisperTranscriptionCoordinator.coalesceWithoutDropping(
+            older,
+            with: newer,
+            maximumDuration: 3
+        ) == nil
+    )
+}
+
+@Test
+func coordinatorDoesNotMutateReplacementSessionAfterTranscriptCallback() async throws {
+    let engine = SequencingWhisperEngine()
+    let replacementDiagnostics = DiagnosticsRecorder()
+    let coordinator = WhisperTranscriptionCoordinator(engine: engine)
+
+    try await coordinator.start(
+        modelID: "first-model",
+        language: "English",
+        onTranscript: { _ in
+            try? await coordinator.start(
+                modelID: "replacement-model",
+                language: "English",
+                onTranscript: { _ in },
+                onDiagnostics: { await replacementDiagnostics.append($0) }
+            )
+        }
+    )
+    await coordinator.ingest(testAudioChunk(duration: 3, timestamp: 0))
+
+    try await eventually {
+        let latest = await replacementDiagnostics.latest
+        return latest.modelID == "replacement-model" && latest.modelState == .ready
+    }
+    try await Task.sleep(for: .milliseconds(20))
+    #expect(await replacementDiagnostics.count == 2)
+    await coordinator.stop()
 }
 
 @Test
@@ -348,16 +512,18 @@ func coordinatorPreservesPendingAudioWhenInferenceFallsBehind() async throws {
 
     let preservedWindows = await engine.inferenceWindows
     guard preservedWindows.count >= 3 else {
-        await coordinator.stop()
+        let stopTask = Task { await coordinator.stop() }
         await engine.completePendingInference(text: "cancelled")
+        await stopTask.value
         return
     }
     let secondWindowEnd = preservedWindows[1].timestamp + preservedWindows[1].duration
     #expect(preservedWindows[2].timestamp < secondWindowEnd)
     #expect(abs(preservedWindows[2].timestamp - 5.6) < 0.001)
 
-    await coordinator.stop()
+    let stopTask = Task { await coordinator.stop() }
     await engine.completePendingInference(text: "cancelled")
+    await stopTask.value
 }
 
 @Test
@@ -457,10 +623,15 @@ private actor SequencingWhisperEngine: WhisperEngineProtocol {
 private actor BlockingWhisperEngine: WhisperEngineProtocol {
     private var continuation: CheckedContinuation<Transcript?, Never>?
     private var pendingTimestamp: TimeInterval = 0
+    private let cancellation = AsyncFlag()
     private(set) var inferenceWindows: [AudioChunk] = []
 
     var hasPendingInference: Bool {
         continuation != nil
+    }
+
+    var hasCancelledInference: Bool {
+        get async { await cancellation.value }
     }
 
     func loadModel(named modelName: String) async throws {}
@@ -468,8 +639,13 @@ private actor BlockingWhisperEngine: WhisperEngineProtocol {
     func transcribe(_ chunk: AudioChunk, language: String) async throws -> Transcript? {
         pendingTimestamp = chunk.timestamp
         inferenceWindows.append(chunk)
-        return await withCheckedContinuation { continuation in
-            self.continuation = continuation
+        let cancellation = cancellation
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+            }
+        } onCancel: {
+            Task { await cancellation.set() }
         }
     }
 
@@ -517,6 +693,13 @@ private actor BlockingLoadWhisperEngine: WhisperEngineProtocol {
     }
 }
 
+private actor CountingLoadWhisperEngine: WhisperEngineProtocol {
+    private(set) var loadCount = 0
+
+    func loadModel(named modelName: String) async throws { loadCount += 1 }
+    func transcribe(_ chunk: AudioChunk, language: String) async throws -> Transcript? { nil }
+}
+
 private actor FailingLoadWhisperEngine: WhisperEngineProtocol {
     private(set) var inferenceCount = 0
 
@@ -546,6 +729,8 @@ private actor TranscriptRecorder {
 private actor DiagnosticsRecorder {
     private var values: [WhisperDiagnostics] = []
 
+    var count: Int { values.count }
+
     var latest: WhisperDiagnostics {
         values.last ?? WhisperDiagnostics()
     }
@@ -553,6 +738,15 @@ private actor DiagnosticsRecorder {
     func append(_ diagnostics: WhisperDiagnostics) {
         values.append(diagnostics)
     }
+}
+
+private actor AsyncFlag {
+    private(set) var value = false
+    func set() { value = true }
+}
+
+private enum EventuallyError: Error {
+    case timedOut
 }
 
 private func eventually(
@@ -566,6 +760,7 @@ private func eventually(
         try await Task.sleep(for: .milliseconds(5))
     }
     Issue.record("Condition was not met before timeout")
+    throw EventuallyError.timedOut
 }
 
 private func testAudioChunk(

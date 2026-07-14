@@ -4,21 +4,19 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var viewModel: MLingoViewModel
     @Environment(\.dismiss) private var dismiss
-    @State private var draftSettings: AppSettings
-    @State private var draftAPIKey: String
+    @State private var draft = SettingsDraft()
+    @State private var isDraftLoaded = false
     @State private var showsOpenAIValidation = false
     @State private var translationTestTask: Task<Void, Never>?
 
     init(viewModel: MLingoViewModel) {
         self.viewModel = viewModel
-        _draftSettings = State(initialValue: viewModel.settings)
-        _draftAPIKey = State(initialValue: viewModel.apiKey)
     }
 
     var body: some View {
         Form {
             Section {
-                Picker("Capture audio using", selection: $draftSettings.audioCaptureBackend) {
+                Picker("Capture audio using", selection: $draft.settings.audioCaptureBackend) {
                     ForEach(AudioCaptureBackend.allCases) { backend in
                         Text(backend.displayName).tag(backend)
                     }
@@ -33,13 +31,13 @@ struct SettingsView: View {
             }
 
             Section("OpenAI") {
-                SecureField("API key", text: $draftAPIKey)
+                SecureField("API key", text: $draft.apiKey)
                     .textContentType(.password)
                     .accessibilityLabel("OpenAI API key")
                     .disabled(viewModel.isTranslationTestRunning)
                 validationMessage(openAIValidation.apiKeyError)
 
-                TextField("Model", text: $draftSettings.openAIModel)
+                TextField("Model", text: $draft.settings.openAIModel)
                     .accessibilityLabel("OpenAI translation model")
                     .disabled(viewModel.isTranslationTestRunning)
                 validationMessage(openAIValidation.modelError)
@@ -53,8 +51,8 @@ struct SettingsView: View {
                     translationTestTask?.cancel()
                     translationTestTask = Task {
                         await viewModel.testTranslation(
-                            apiKey: draftAPIKey,
-                            settings: draftSettings
+                            apiKey: draft.apiKey,
+                            settings: draft.settings
                         )
                     }
                 } label: {
@@ -76,12 +74,12 @@ struct SettingsView: View {
             }
 
             Section("Whisper") {
-                TextField("Model", text: $draftSettings.whisperModel)
+                TextField("Model", text: $draft.settings.whisperModel)
                     .accessibilityLabel("Whisper model")
             }
 
             Section("Subtitles") {
-                Slider(value: $draftSettings.subtitleFontSize, in: 18...64, step: 1) {
+                Slider(value: $draft.settings.subtitleFontSize, in: 18...64, step: 1) {
                     Text("Font size")
                 } minimumValueLabel: {
                     Text("18")
@@ -89,7 +87,7 @@ struct SettingsView: View {
                     Text("64")
                 }
 
-                Slider(value: $draftSettings.subtitleBackgroundOpacity, in: 0.2...0.9, step: 0.01) {
+                Slider(value: $draft.settings.subtitleBackgroundOpacity, in: 0.2...0.9, step: 0.01) {
                     Text("Background opacity")
                 } minimumValueLabel: {
                     Text("20%")
@@ -97,20 +95,20 @@ struct SettingsView: View {
                     Text("90%")
                 }
 
-                Toggle("Show bilingual subtitles", isOn: $draftSettings.showBilingualSubtitles)
+                Toggle("Show bilingual subtitles", isOn: $draft.settings.showBilingualSubtitles)
             }
 
             Section("Languages") {
-                TextField("Source language", text: $draftSettings.sourceLanguage)
+                TextField("Source language", text: $draft.settings.sourceLanguage)
                     .disabled(viewModel.isTranslationTestRunning)
                 validationMessage(openAIValidation.sourceLanguageError)
-                TextField("Target language", text: $draftSettings.targetLanguage)
+                TextField("Target language", text: $draft.settings.targetLanguage)
                     .disabled(viewModel.isTranslationTestRunning)
                 validationMessage(openAIValidation.targetLanguageError)
             }
 
             Section("Appearance") {
-                Picker("Theme", selection: $draftSettings.theme) {
+                Picker("Theme", selection: $draft.settings.theme) {
                     ForEach(AppTheme.allCases, id: \.self) { theme in
                         Text(theme.rawValue.capitalized).tag(theme)
                     }
@@ -126,7 +124,7 @@ struct SettingsView: View {
                     showsOpenAIValidation = true
                     guard openAIValidation.hasValidTranslationSettings else { return }
                     Task {
-                        if await viewModel.save(draftSettings, apiKey: draftAPIKey) {
+                        if await viewModel.save(draft.settings, apiKey: draft.apiKey) {
                             dismiss()
                         }
                     }
@@ -137,11 +135,23 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-        .onAppear { viewModel.resetTranslationTest() }
-        .onChange(of: draftAPIKey) { _, _ in viewModel.resetTranslationTest() }
-        .onChange(of: draftSettings.openAIModel) { _, _ in viewModel.resetTranslationTest() }
-        .onChange(of: draftSettings.sourceLanguage) { _, _ in viewModel.resetTranslationTest() }
-        .onChange(of: draftSettings.targetLanguage) { _, _ in viewModel.resetTranslationTest() }
+        .disabled(!isDraftLoaded)
+        .overlay {
+            if !isDraftLoaded {
+                ProgressView("Loading settings…")
+            }
+        }
+        .task {
+            await viewModel.load()
+            guard !Task.isCancelled else { return }
+            draft = SettingsDraft(settings: viewModel.settings, apiKey: viewModel.apiKey)
+            isDraftLoaded = true
+            viewModel.resetTranslationTest()
+        }
+        .onChange(of: draft.apiKey) { _, _ in viewModel.resetTranslationTest() }
+        .onChange(of: draft.settings.openAIModel) { _, _ in viewModel.resetTranslationTest() }
+        .onChange(of: draft.settings.sourceLanguage) { _, _ in viewModel.resetTranslationTest() }
+        .onChange(of: draft.settings.targetLanguage) { _, _ in viewModel.resetTranslationTest() }
         .onDisappear {
             translationTestTask?.cancel()
             translationTestTask = nil
@@ -149,7 +159,7 @@ struct SettingsView: View {
     }
 
     private var openAIValidation: OpenAISettingsValidation {
-        OpenAISettingsValidation(apiKey: draftAPIKey, settings: draftSettings)
+        OpenAISettingsValidation(apiKey: draft.apiKey, settings: draft.settings)
     }
 
     @ViewBuilder
@@ -203,7 +213,7 @@ struct SettingsView: View {
     }
 
     private var audioCaptureHelpText: String {
-        switch draftSettings.audioCaptureBackend {
+        switch draft.settings.audioCaptureBackend {
         case .coreAudioTap:
             if #available(macOS 14.2, *) {
                 "Captures system audio directly and requires System Audio Recording permission."
@@ -214,4 +224,9 @@ struct SettingsView: View {
             "Captures system audio through ScreenCaptureKit and requires Screen Recording permission."
         }
     }
+}
+
+private struct SettingsDraft: Equatable {
+    var settings = AppSettings()
+    var apiKey = ""
 }

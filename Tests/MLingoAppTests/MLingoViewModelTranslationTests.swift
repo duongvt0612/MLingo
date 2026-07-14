@@ -77,13 +77,49 @@ func translationTestSurfacesValidationWithoutCallingEngine() async {
     #expect(await testEngine.callCount == 0)
 }
 
+@Test @MainActor
+func startPipelineStopsWhenSavingSettingsFails() async throws {
+    let settingsStore = AppTestSettingsStore(saveError: AppTestError.saveFailed)
+    let audioFactory = AppTestAudioFactory()
+    let viewModel = makeViewModel(
+        settingsStore: settingsStore,
+        audioFactory: audioFactory,
+        translationTestEngineFactory: { _ in AppTestTranslationEngine() }
+    )
+
+    viewModel.startTranscriptionTest()
+
+    try await appEventually {
+        viewModel.lastError != nil && viewModel.activeMode == .idle
+    }
+    #expect(audioFactory.makeCount == 0)
+    #expect(viewModel.status != "Starting transcription test")
+}
+
+@Test @MainActor
+func startPipelineEndsActiveModeWhenAudioStartupFails() async throws {
+    let audioFactory = AppTestAudioFactory(startError: MLingoError.noAudioSource)
+    let viewModel = makeViewModel(
+        audioFactory: audioFactory,
+        translationTestEngineFactory: { _ in AppTestTranslationEngine() }
+    )
+
+    viewModel.startTranscriptionTest()
+
+    try await appEventually {
+        viewModel.lastError == MLingoError.noAudioSource.localizedDescription
+            && viewModel.activeMode == .idle
+    }
+    #expect(viewModel.status != "Testing transcription")
+}
+
 @MainActor
 private func makeViewModel(
     settingsStore: AppTestSettingsStore = AppTestSettingsStore(),
     keyStore: AppTestAPIKeyStore = AppTestAPIKeyStore(),
+    audioFactory: AppTestAudioFactory = AppTestAudioFactory(),
     translationTestEngineFactory: @escaping MLingoViewModel.TranslationTestEngineFactory
 ) -> MLingoViewModel {
-    let audioFactory = AppTestAudioFactory()
     let pipeline = SubtitlePipeline(
         audioEngineFactory: audioFactory,
         whisperEngine: AppTestWhisperEngine(),
@@ -101,10 +137,23 @@ private func makeViewModel(
     )
 }
 
+private enum AppTestError: Error {
+    case saveFailed
+}
+
 private actor AppTestSettingsStore: SettingsStoreProtocol {
     private(set) var saveCount = 0
+    private let saveError: (any Error)?
+
+    init(saveError: (any Error)? = nil) {
+        self.saveError = saveError
+    }
+
     func load() async throws -> AppSettings { AppSettings() }
-    func save(_ settings: AppSettings) async throws { saveCount += 1 }
+    func save(_ settings: AppSettings) async throws {
+        saveCount += 1
+        if let saveError { throw saveError }
+    }
 }
 
 private final class AppTestAPIKeyStore: APIKeyStoreProtocol, @unchecked Sendable {
@@ -151,15 +200,47 @@ private final class AppTestOverlayEngine: OverlayEngineProtocol {
 }
 
 private final class AppTestAudioFactory: AudioEngineFactoryProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private let startError: (any Error)?
+    private(set) var makeCount = 0
+
+    init(startError: (any Error)? = nil) {
+        self.startError = startError
+    }
+
     func makeAudioEngine(preferredBackend: AudioCaptureBackend) -> any AudioEngineProtocol {
-        AppTestAudioEngine()
+        lock.withLock { makeCount += 1 }
+        return AppTestAudioEngine(startError: startError)
     }
 }
 
 private final class AppTestAudioEngine: AudioEngineProtocol, @unchecked Sendable {
     let chunks = AsyncStream<AudioChunk> { $0.finish() }
     let diagnostics = AsyncStream<AudioCaptureDiagnostics> { $0.finish() }
+    private let startError: (any Error)?
+
+    init(startError: (any Error)? = nil) {
+        self.startError = startError
+    }
+
     var state: AudioCaptureState { get async { .idle } }
-    func start() async throws {}
+    func start() async throws {
+        if let startError { throw startError }
+    }
     func stop() async {}
+}
+
+@MainActor
+private func appEventually(
+    timeout: Duration = .seconds(1),
+    condition: @escaping @MainActor () -> Bool
+) async throws {
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while clock.now < deadline {
+        if condition() { return }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    Issue.record("Condition was not met before timeout")
+    throw AppTestError.saveFailed
 }

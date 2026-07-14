@@ -108,6 +108,8 @@ public actor MLXWhisperEngine: WhisperEngineProtocol {
             loadedModelName = normalizedName
         } catch is CancellationError {
             throw CancellationError()
+        } catch let error as MLingoError {
+            throw error
         } catch {
             throw MLingoError.whisperModelLoadFailed(
                 "Could not load Whisper model \(normalizedName). Check the model ID and network connection. \(String(describing: error))"

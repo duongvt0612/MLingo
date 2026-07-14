@@ -27,7 +27,11 @@ struct CoreAudioSampleBatcher: Sendable {
         guard newSampleRate > 0, !newSamples.isEmpty else { return [] }
 
         var batches: [CoreAudioSampleBatch] = []
-        if !samples.isEmpty, sampleRate != newSampleRate, let pendingBatch = flush() {
+        let hasDiscontinuity = !samples.isEmpty && (
+            sampleRate != newSampleRate
+                || isTimestampDiscontinuous(timestamp, sampleRate: sampleRate)
+        )
+        if hasDiscontinuity, let pendingBatch = flush() {
             batches.append(pendingBatch)
         }
         if samples.isEmpty {
@@ -50,6 +54,15 @@ struct CoreAudioSampleBatcher: Sendable {
             startTimestamp += Double(targetSampleCount) / sampleRate
         }
         return batches
+    }
+
+    private func isTimestampDiscontinuous(
+        _ timestamp: TimeInterval,
+        sampleRate: Double
+    ) -> Bool {
+        let expectedTimestamp = startTimestamp + Double(samples.count) / sampleRate
+        let tolerance = 1 / sampleRate
+        return !timestamp.isFinite || abs(timestamp - expectedTimestamp) > tolerance
     }
 
     mutating func flush() -> CoreAudioSampleBatch? {

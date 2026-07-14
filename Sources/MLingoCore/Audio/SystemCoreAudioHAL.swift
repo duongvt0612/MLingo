@@ -271,6 +271,8 @@ final class SystemCoreAudioHAL: CoreAudioHALProtocol, @unchecked Sendable {
         permissionSensitive: Bool = false
     ) throws {
         guard status != noErr else { return }
+        // `perm` (0x7065_726D) is Core Audio's permission-denied OSStatus on
+        // systems that do not surface kAudioDevicePermissionsError directly.
         if permissionSensitive,
            status == kAudioDevicePermissionsError || status == OSStatus(0x7065_726D) {
             throw MLingoError.systemAudioPermissionDenied

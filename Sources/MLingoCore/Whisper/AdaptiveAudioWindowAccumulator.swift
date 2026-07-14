@@ -63,7 +63,10 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
             sampleRate = chunk.sampleRate
             channelCount = chunk.channelCount
             startTimestamp = chunk.timestamp
-        } else if sampleRate != chunk.sampleRate || channelCount != chunk.channelCount {
+        } else if sampleRate != chunk.sampleRate
+                    || channelCount != chunk.channelCount
+                    || isTimestampDiscontinuous(chunk.timestamp)
+        {
             reset()
             sampleRate = chunk.sampleRate
             channelCount = chunk.channelCount
@@ -127,6 +130,12 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
         }
 
         return windows
+    }
+
+    private func isTimestampDiscontinuous(_ timestamp: TimeInterval) -> Bool {
+        let expectedTimestamp = startTimestamp + Double(samples.count) / sampleRate
+        let tolerance = 1 / sampleRate
+        return !timestamp.isFinite || abs(timestamp - expectedTimestamp) > tolerance
     }
 
     static func retainedStartIndex(

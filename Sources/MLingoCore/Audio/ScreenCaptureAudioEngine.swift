@@ -63,8 +63,6 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
             )
 
             guard let display = content.displays.first else {
-                updateDiagnostics(state: .failed(MLingoError.noAudioSource.localizedDescription))
-                MLingoLogger.audio.error("No capturable display is available")
                 throw MLingoError.noAudioSource
             }
 

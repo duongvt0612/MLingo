@@ -24,6 +24,16 @@ func mlxWhisperEngineRejectsBlankModelName() async {
 }
 
 @Test
+func mlxWhisperEnginePreservesTypedModelLoadErrors() async {
+    let expected = MLingoError.whisperModelLoadFailed("Metal resources are unavailable.")
+    let engine = MLXWhisperEngine(backend: FailingWhisperBackend(error: expected))
+
+    await #expect(throws: expected) {
+        try await engine.loadModel(named: "model-a")
+    }
+}
+
+@Test
 func mlxWhisperEnginePassesLanguageAndBuildsTranscript() async throws {
     let backend = StubWhisperBackend(transcripts: ["  Hello from MLX  "])
     let engine = MLXWhisperEngine(backend: backend)
@@ -166,6 +176,17 @@ private actor StubWhisperBackend: WhisperInferenceBackend {
         languages.append(language)
         return transcripts.isEmpty ? "" : transcripts.removeFirst()
     }
+}
+
+private actor FailingWhisperBackend: WhisperInferenceBackend {
+    let error: MLingoError
+
+    init(error: MLingoError) {
+        self.error = error
+    }
+
+    func loadModel(named modelName: String) async throws { throw error }
+    func transcribe(samples: [Float], language: String) async throws -> String { "" }
 }
 
 private func audioChunk(duration: TimeInterval, timestamp: TimeInterval) -> AudioChunk {

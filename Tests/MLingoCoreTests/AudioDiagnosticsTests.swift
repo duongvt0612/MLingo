@@ -179,6 +179,42 @@ func coreAudioBatcherCombinesRealtimeCallbacksWithoutDroppingSamples() {
     #expect(batches.flatMap(\.samples).count + batcher.bufferedSampleCount == 10_080)
 }
 
+@Test(arguments: [1.0, 0.02])
+func coreAudioBatcherSeparatesTimestampDiscontinuities(nextTimestamp: TimeInterval) throws {
+    var batcher = CoreAudioSampleBatcher(targetDuration: 0.1)
+    #expect(
+        batcher.append(
+            samples: Array(repeating: 1, count: 2_400),
+            sampleRate: 48_000,
+            timestamp: 0
+        ).isEmpty
+    )
+
+    let flushed = batcher.append(
+        samples: Array(repeating: 2, count: 2_400),
+        sampleRate: 48_000,
+        timestamp: nextTimestamp
+    )
+    let oldBatch = try #require(flushed.first)
+    let pendingBatch = batcher.flush()
+    let newBatch = try #require(pendingBatch)
+
+    #expect(flushed.count == 1)
+    #expect(oldBatch.timestamp == 0)
+    #expect(oldBatch.samples == Array(repeating: 1, count: 2_400))
+    #expect(newBatch.timestamp == nextTimestamp)
+    #expect(newBatch.samples == Array(repeating: 2, count: 2_400))
+}
+
+@Test
+func systemAudioPermissionErrorUsesEnglishSystemSettingsLabels() {
+    let message = MLingoError.systemAudioPermissionDenied.localizedDescription
+
+    #expect(message.contains("Allow"))
+    #expect(message.contains("System Settings > Privacy & Security > Screen & System Audio Recording"))
+    #expect(!message.contains("Cấp quyền"))
+}
+
 @Test
 func streamingResamplerPreservesContinuousCoreAudioBatches() {
     let resampler = StreamingMonoResampler(targetSampleRate: 16_000)

@@ -110,8 +110,22 @@ func adaptiveWindowDoesNotEmitRetainedOverlapFollowedByLongSilence() {
     #expect(accumulator.flushForSilence() == nil)
 }
 
+@Test(arguments: [1.0, 0.1])
+func adaptiveWindowDiscardsBufferedAudioAcrossTimestampDiscontinuities(
+    nextTimestamp: TimeInterval
+) throws {
+    var accumulator = AdaptiveAudioWindowAccumulator()
+    #expect(accumulator.append(chunk(duration: 0.2, timestamp: 0)).isEmpty)
+    #expect(accumulator.append(chunk(duration: 0.45, timestamp: nextTimestamp)).isEmpty)
+
+    let flushedWindow = accumulator.flushForSilence()
+    let window = try #require(flushedWindow)
+    #expect(window.timestamp == nextTimestamp)
+    #expect(abs(window.duration - 0.45) < 0.001)
+}
+
 @Test
-func transcriptDeduplicatorRejectsEmptyExactAndNearDuplicates() throws {
+func transcriptDeduplicatorRejectsEmptyAndOverlappingDuplicates() throws {
     var deduplicator = TranscriptDeduplicator()
 
     #expect(deduplicator.process(Transcript(text: "   ", timestamp: 0)) == nil)
@@ -119,9 +133,35 @@ func transcriptDeduplicatorRejectsEmptyExactAndNearDuplicates() throws {
     let processedFirst = deduplicator.process(Transcript(text: "Hello, world!", timestamp: 1))
     let first = try #require(processedFirst)
     #expect(first.text == "Hello, world!")
-    #expect(deduplicator.process(Transcript(text: " hello world ", timestamp: 2)) == nil)
-    #expect(deduplicator.process(Transcript(text: "Hello worlds", timestamp: 3)) == nil)
+    #expect(
+        deduplicator.process(
+            Transcript(text: " hello world ", timestamp: 2),
+            audioOverlapDuration: 0.4
+        ) == nil
+    )
+    #expect(
+        deduplicator.process(
+            Transcript(text: "Hello worlds", timestamp: 3),
+            audioOverlapDuration: 0.4
+        ) == nil
+    )
     #expect(deduplicator.suppressedCount == 3)
+}
+
+@Test
+func transcriptDeduplicatorPreservesExactRepeatWithoutAudioOverlap() throws {
+    var deduplicator = TranscriptDeduplicator()
+    let first = deduplicator.process(Transcript(text: "Please repeat this", timestamp: 1))
+    _ = try #require(first)
+
+    let processedRepeat = deduplicator.process(
+        Transcript(text: "Please repeat this", timestamp: 4),
+        audioOverlapDuration: 0
+    )
+    let repeated = try #require(processedRepeat)
+
+    #expect(repeated.text == "Please repeat this")
+    #expect(deduplicator.suppressedCount == 0)
 }
 
 @Test

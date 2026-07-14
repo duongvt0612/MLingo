@@ -112,8 +112,9 @@ final class MLingoViewModel {
         }
     }
 
-    func save() async {
-        _ = await save(settings, apiKey: apiKey)
+    @discardableResult
+    func save() async -> Bool {
+        await save(settings, apiKey: apiKey)
     }
 
     @discardableResult
@@ -261,7 +262,7 @@ final class MLingoViewModel {
         let startingStatus = mode == .translation ? "Starting translation" : "Starting transcription test"
         activeSessionID = sessionID
         activeMode = viewMode
-        status = startingStatus
+        status = "Saving settings"
         lastError = nil
         lastWarning = nil
         transcriptionEntries = []
@@ -273,11 +274,15 @@ final class MLingoViewModel {
         startTask = Task {
             defer { clearStartTask(for: sessionID) }
 
-            await save()
+            guard await save() else {
+                guard isCurrentSession(sessionID, mode: viewMode) else { return }
+                await finishActiveMode(statusAfterStop: "Settings need attention")
+                return
+            }
             guard isCurrentSession(sessionID, mode: viewMode) else { return }
             status = startingStatus
 
-            await pipeline.start(
+            let started = await pipeline.start(
                 mode: mode,
                 onError: { [weak self, sessionID] message in
                     Task { @MainActor in
@@ -315,6 +320,10 @@ final class MLingoViewModel {
                 }
             )
             guard isCurrentSession(sessionID, mode: viewMode) else { return }
+            guard started else {
+                await finishActiveMode(statusAfterStop: "Needs attention")
+                return
+            }
             status = mode == .translation ? "Listening" : "Testing transcription"
         }
     }

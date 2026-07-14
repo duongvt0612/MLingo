@@ -15,6 +15,7 @@ public struct WhisperDiagnostics: Equatable, Sendable {
     public var windowDuration: TimeInterval
     public var processedWindowCount: Int
     public var suppressedDuplicateCount: Int
+    public var droppedBacklogWindowCount: Int
 
     public init(
         modelState: WhisperModelState = .idle,
@@ -23,7 +24,8 @@ public struct WhisperDiagnostics: Equatable, Sendable {
         inferenceLatency: TimeInterval = 0,
         windowDuration: TimeInterval = 0,
         processedWindowCount: Int = 0,
-        suppressedDuplicateCount: Int = 0
+        suppressedDuplicateCount: Int = 0,
+        droppedBacklogWindowCount: Int = 0
     ) {
         self.modelState = modelState
         self.modelID = modelID
@@ -32,5 +34,6 @@ public struct WhisperDiagnostics: Equatable, Sendable {
         self.windowDuration = windowDuration
         self.processedWindowCount = processedWindowCount
         self.suppressedDuplicateCount = suppressedDuplicateCount
+        self.droppedBacklogWindowCount = droppedBacklogWindowCount
     }
 }
