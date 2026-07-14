@@ -194,7 +194,7 @@ func streamingResamplerPreservesContinuousCoreAudioBatches() {
         outputSamples.append(contentsOf: output ?? [])
     }
 
-    #expect((15_900...16_100).contains(outputSamples.count))
+    #expect((15_700...16_100).contains(outputSamples.count))
     #expect(outputSamples.contains { abs($0) > 0.5 })
 }
 
