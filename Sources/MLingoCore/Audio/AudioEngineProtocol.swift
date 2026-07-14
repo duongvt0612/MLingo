@@ -65,9 +65,36 @@ public protocol AudioEngineFactoryProtocol: Sendable {
 }
 
 public struct SystemAudioEngineFactory: AudioEngineFactoryProtocol {
-    public init() {}
+    private let isCoreAudioTapAvailable: Bool
+    private let makeCoreAudioTapEngine: @Sendable () -> any AudioEngineProtocol
+    private let makeScreenCaptureKitEngine: @Sendable () -> any AudioEngineProtocol
+
+    public init() {
+        if #available(macOS 14.2, *) {
+            isCoreAudioTapAvailable = true
+            makeCoreAudioTapEngine = { CoreAudioTapEngine() }
+        } else {
+            isCoreAudioTapAvailable = false
+            makeCoreAudioTapEngine = { ScreenCaptureAudioEngine() }
+        }
+        makeScreenCaptureKitEngine = { ScreenCaptureAudioEngine() }
+    }
+
+    init(
+        isCoreAudioTapAvailable: Bool,
+        makeCoreAudioTapEngine: @escaping @Sendable () -> any AudioEngineProtocol,
+        makeScreenCaptureKitEngine: @escaping @Sendable () -> any AudioEngineProtocol
+    ) {
+        self.isCoreAudioTapAvailable = isCoreAudioTapAvailable
+        self.makeCoreAudioTapEngine = makeCoreAudioTapEngine
+        self.makeScreenCaptureKitEngine = makeScreenCaptureKitEngine
+    }
 
     public func makeAudioEngine() -> any AudioEngineProtocol {
-        ScreenCaptureAudioEngine()
+        if isCoreAudioTapAvailable {
+            makeCoreAudioTapEngine()
+        } else {
+            makeScreenCaptureKitEngine()
+        }
     }
 }
