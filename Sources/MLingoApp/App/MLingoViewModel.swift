@@ -189,7 +189,7 @@ final class MLingoViewModel {
                     }
                 },
                 onAudioDiagnostics: { [weak self, sessionID] diagnostics in
-                    Task { @MainActor in
+                    await MainActor.run {
                         guard self?.activeSessionID == sessionID else { return }
                         self?.audioDiagnostics = diagnostics
                     }

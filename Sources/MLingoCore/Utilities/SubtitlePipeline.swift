@@ -40,7 +40,7 @@ public final class SubtitlePipeline {
     public func start(
         mode: SubtitlePipelineMode = .translation,
         onError: @escaping @Sendable (String) -> Void,
-        onAudioDiagnostics: (@Sendable (AudioCaptureDiagnostics) -> Void)? = nil,
+        onAudioDiagnostics: (@Sendable (AudioCaptureDiagnostics) async -> Void)? = nil,
         onTranscript: @escaping TranscriptHandler = { _ in },
         onWhisperDiagnostics: @escaping WhisperDiagnosticsHandler = { _ in }
     ) async {
@@ -90,7 +90,7 @@ public final class SubtitlePipeline {
                 diagnosticsTask = Task { [audioEngine] in
                     for await diagnostics in audioEngine.diagnostics {
                         if Task.isCancelled { return }
-                        onAudioDiagnostics(diagnostics)
+                        await onAudioDiagnostics(diagnostics)
                     }
                 }
             }

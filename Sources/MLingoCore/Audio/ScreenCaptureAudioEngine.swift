@@ -22,17 +22,25 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
 
     public override init() {
         var capturedContinuation: AsyncStream<AudioChunk>.Continuation?
-        var capturedDiagnosticsContinuation: AsyncStream<AudioCaptureDiagnostics>.Continuation?
         chunks = AsyncStream { continuation in
             capturedContinuation = continuation
         }
-        diagnostics = AsyncStream { continuation in
-            capturedDiagnosticsContinuation = continuation
-        }
+        let (diagnostics, diagnosticsContinuation) = Self.makeDiagnosticsStream()
+        self.diagnostics = diagnostics
         continuation = capturedContinuation
-        diagnosticsContinuation = capturedDiagnosticsContinuation
+        self.diagnosticsContinuation = diagnosticsContinuation
         super.init()
         outputQueue.setSpecific(key: outputQueueKey, value: true)
+    }
+
+    static func makeDiagnosticsStream() -> (
+        AsyncStream<AudioCaptureDiagnostics>,
+        AsyncStream<AudioCaptureDiagnostics>.Continuation
+    ) {
+        AsyncStream.makeStream(
+            of: AudioCaptureDiagnostics.self,
+            bufferingPolicy: .bufferingNewest(1)
+        )
     }
 
     public var state: AudioCaptureState {
@@ -138,11 +146,9 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
         recordCapturedChunk(chunk, level: level)
 
         guard level.isSpeechLike else {
-            recordDroppedChunk()
             return
         }
 
-        recordSpeechLikeChunk()
         continuation?.yield(chunk)
     }
 
@@ -453,7 +459,13 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
 
     private func recordCapturedChunk(_ chunk: AudioChunk, level: AudioLevel) {
         performOnOutputQueue {
-            _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.recordCapturedChunk(chunk, level: level))
+            _ = diagnosticsAccumulator.recordCapturedChunk(chunk, level: level)
+            if level.isSpeechLike {
+                _ = diagnosticsAccumulator.recordSpeechLikeChunk()
+            } else {
+                _ = diagnosticsAccumulator.recordDroppedChunk()
+            }
+            _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.diagnostics)
         }
     }
 
@@ -466,12 +478,6 @@ public final class ScreenCaptureAudioEngine: NSObject, AudioEngineProtocol, SCSt
     private func recordEmptyChunk() {
         performOnOutputQueue {
             _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.recordEmptyChunk())
-        }
-    }
-
-    private func recordSpeechLikeChunk() {
-        performOnOutputQueue {
-            _ = diagnosticsContinuation?.yield(diagnosticsAccumulator.recordSpeechLikeChunk())
         }
     }
 
