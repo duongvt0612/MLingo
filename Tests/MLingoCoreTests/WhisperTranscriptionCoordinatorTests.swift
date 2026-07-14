@@ -99,6 +99,43 @@ func coordinatorStopSuppressesCallbacksFromPreviousSession() async throws {
 }
 
 @Test
+func coordinatorCoalescesPendingWindowsWhenInferenceFallsBehind() async throws {
+    let engine = BlockingWhisperEngine()
+    let coordinator = WhisperTranscriptionCoordinator(
+        engine: engine,
+        configuration: .init(
+            preferredWindowDuration: 1,
+            maximumWindowDuration: 3,
+            silenceFlushDelay: 10,
+            overlapDuration: 0.2
+        )
+    )
+
+    try await coordinator.start(
+        modelID: "fixture/whisper",
+        language: "English",
+        onTranscript: { _ in }
+    )
+    await coordinator.ingest(testAudioChunk(duration: 1, timestamp: 0))
+    try await eventually {
+        await engine.hasPendingInference
+    }
+
+    await coordinator.ingest(testAudioChunk(duration: 4, timestamp: 1))
+    await engine.completePendingInference(text: "first")
+    try await eventually {
+        await engine.inferenceWindows.count >= 2
+    }
+
+    let windows = await engine.inferenceWindows
+    #expect(abs(windows[1].duration - 3) < 0.001)
+    #expect(abs(windows[1].timestamp - 2) < 0.001)
+
+    await coordinator.stop()
+    await engine.completePendingInference(text: "cancelled")
+}
+
+@Test
 func silenceAfterHardLimitDoesNotRetranscribeOverlapOnly() async throws {
     let engine = SequencingWhisperEngine()
     let diagnosticsRecorder = DiagnosticsRecorder()
@@ -156,6 +193,7 @@ private actor SequencingWhisperEngine: WhisperEngineProtocol {
 private actor BlockingWhisperEngine: WhisperEngineProtocol {
     private var continuation: CheckedContinuation<Transcript?, Never>?
     private var pendingTimestamp: TimeInterval = 0
+    private(set) var inferenceWindows: [AudioChunk] = []
 
     var hasPendingInference: Bool {
         continuation != nil
@@ -165,6 +203,7 @@ private actor BlockingWhisperEngine: WhisperEngineProtocol {
 
     func transcribe(_ chunk: AudioChunk, language: String) async throws -> Transcript? {
         pendingTimestamp = chunk.timestamp
+        inferenceWindows.append(chunk)
         return await withCheckedContinuation { continuation in
             self.continuation = continuation
         }
