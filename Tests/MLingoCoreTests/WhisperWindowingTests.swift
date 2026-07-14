@@ -90,6 +90,27 @@ func adaptiveWindowAlwaysAdvancesWhenRoundedOverlapFillsWindow() {
 }
 
 @Test
+func adaptiveWindowDoesNotEmitRetainedOverlapFollowedByLongSilence() {
+    let configuration = AdaptiveAudioWindowConfiguration(
+        preferredWindowDuration: 1.5,
+        maximumWindowDuration: 3,
+        overlapDuration: 0.4
+    )
+    var accumulator = AdaptiveAudioWindowAccumulator(configuration: configuration)
+
+    let speechWindows = accumulator.append(chunk(duration: 3, timestamp: 0))
+    #expect(speechWindows.count == 1)
+    #expect(abs(accumulator.bufferedDuration - 0.4) < 0.001)
+
+    let silenceWindows = accumulator.append(
+        chunk(duration: 3, timestamp: 3, isSpeechLike: false)
+    )
+
+    #expect(silenceWindows.isEmpty)
+    #expect(accumulator.flushForSilence() == nil)
+}
+
+@Test
 func transcriptDeduplicatorRejectsEmptyExactAndNearDuplicates() throws {
     var deduplicator = TranscriptDeduplicator()
 

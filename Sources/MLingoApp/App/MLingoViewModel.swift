@@ -84,17 +84,25 @@ final class MLingoViewModel {
     }
 
     func save() async {
+        _ = await save(settings)
+    }
+
+    @discardableResult
+    func save(_ candidateSettings: AppSettings) async -> Bool {
         do {
-            try await settingsStore.save(settings)
             if apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 try apiKeyStore.deleteAPIKey()
             } else {
                 try apiKeyStore.saveAPIKey(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
             }
+            try await settingsStore.save(candidateSettings)
+            settings = candidateSettings
             status = "Settings saved"
             lastError = nil
+            return true
         } catch {
             lastError = error.localizedDescription
+            return false
         }
     }
 

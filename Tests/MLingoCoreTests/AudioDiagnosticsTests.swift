@@ -182,20 +182,56 @@ func coreAudioBatcherCombinesRealtimeCallbacksWithoutDroppingSamples() {
 @Test
 func streamingResamplerPreservesContinuousCoreAudioBatches() {
     let resampler = StreamingMonoResampler(targetSampleRate: 16_000)
-    var outputSamples: [Float] = []
-
-    for batchIndex in 0..<10 {
-        let input = (0..<4_800).map { sampleIndex in
+    let inputBatches = (0..<10).map { batchIndex in
+        (0..<4_800).map { sampleIndex in
             let absoluteIndex = batchIndex * 4_800 + sampleIndex
             return Float(sin(Double(absoluteIndex) * 2 * .pi / 480))
         }
+    }
+    let completeInput = inputBatches.flatMap { $0 }
+    let referenceSamples = AudioPCMNormalizer.resampleMono(
+        completeInput,
+        sourceSampleRate: 48_000
+    ) ?? []
+    var outputSamples: [Float] = []
+    var outputBoundaries: [Int] = []
+
+    for input in inputBatches {
         let output = resampler.convert(input, sourceSampleRate: 48_000)
         #expect(output != nil)
         outputSamples.append(contentsOf: output ?? [])
+        outputBoundaries.append(outputSamples.count)
     }
 
     #expect((15_700...16_100).contains(outputSamples.count))
     #expect(outputSamples.contains { abs($0) > 0.5 })
+    #expect((15_700...16_100).contains(referenceSamples.count))
+
+    let latencyOffset = bestReferenceOffset(
+        streaming: outputSamples,
+        reference: referenceSamples,
+        maximumOffset: 64
+    )
+    #expect(abs(latencyOffset) <= 64)
+
+    let aggregateError = meanAbsoluteReferenceError(
+        streaming: outputSamples,
+        reference: referenceSamples,
+        offset: latencyOffset,
+        indices: stride(from: 0, to: outputSamples.count, by: 17)
+    )
+    #expect(aggregateError < 0.01)
+
+    for boundary in outputBoundaries.dropLast() {
+        let boundaryIndices = max(0, boundary - 12)..<min(outputSamples.count, boundary + 12)
+        let boundaryError = meanAbsoluteReferenceError(
+            streaming: outputSamples,
+            reference: referenceSamples,
+            offset: latencyOffset,
+            indices: boundaryIndices
+        )
+        #expect(boundaryError < 0.02)
+    }
 }
 
 @Test
@@ -210,4 +246,46 @@ func diagnosticsStreamDropsStaleSnapshots() async {
     var iterator = stream.makeAsyncIterator()
     #expect(await iterator.next()?.capturedChunkCount == 3)
     #expect(await iterator.next() == nil)
+}
+
+private func bestReferenceOffset(
+    streaming: [Float],
+    reference: [Float],
+    maximumOffset: Int
+) -> Int {
+    (-maximumOffset...maximumOffset).min { lhs, rhs in
+        meanAbsoluteReferenceError(
+            streaming: streaming,
+            reference: reference,
+            offset: lhs,
+            indices: stride(from: 0, to: streaming.count, by: 31)
+        ) < meanAbsoluteReferenceError(
+            streaming: streaming,
+            reference: reference,
+            offset: rhs,
+            indices: stride(from: 0, to: streaming.count, by: 31)
+        )
+    } ?? 0
+}
+
+private func meanAbsoluteReferenceError<S: Sequence>(
+    streaming: [Float],
+    reference: [Float],
+    offset: Int,
+    indices: S
+) -> Double where S.Element == Int {
+    var totalError = 0.0
+    var comparedSampleCount = 0
+    for streamingIndex in indices {
+        let referenceIndex = streamingIndex + offset
+        guard streaming.indices.contains(streamingIndex),
+              reference.indices.contains(referenceIndex)
+        else {
+            continue
+        }
+        totalError += Double(abs(streaming[streamingIndex] - reference[referenceIndex]))
+        comparedSampleCount += 1
+    }
+    guard comparedSampleCount > 0 else { return .infinity }
+    return totalError / Double(comparedSampleCount)
 }

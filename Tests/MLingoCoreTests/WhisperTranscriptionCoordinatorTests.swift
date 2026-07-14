@@ -31,6 +31,119 @@ func coordinatorFlushesShortSpeechAfterSilence() async throws {
 }
 
 @Test
+func coordinatorUsesSampleDurationWhenMetadataDurationIsZero() async throws {
+    let engine = SequencingWhisperEngine()
+    let recorder = TranscriptRecorder()
+    let coordinator = WhisperTranscriptionCoordinator(
+        engine: engine,
+        configuration: .init(silenceFlushDelay: 0.02)
+    )
+
+    try await coordinator.start(
+        modelID: "fixture/whisper",
+        language: "English",
+        onTranscript: { await recorder.append($0) }
+    )
+    await coordinator.ingest(
+        testAudioChunk(duration: 0.45, timestamp: 0, metadataDuration: 0)
+    )
+
+    try await eventually { await recorder.count == 1 }
+    #expect(await engine.inferenceWindows.first?.samples.count == 7_200)
+    await coordinator.stop()
+}
+
+@Test
+func coordinatorBoundsZeroMetadataPreRollUsingSampleDuration() async throws {
+    let engine = SequencingWhisperEngine()
+    let coordinator = WhisperTranscriptionCoordinator(
+        engine: engine,
+        configuration: .init(
+            minimumSpeechDuration: 0.1,
+            preferredWindowDuration: 1,
+            maximumWindowDuration: 2,
+            silenceFlushDelay: 0.02,
+            overlapDuration: 0.2
+        )
+    )
+
+    try await coordinator.start(
+        modelID: "fixture/whisper",
+        language: "English",
+        onTranscript: { _ in }
+    )
+    for index in 0..<5 {
+        await coordinator.ingest(
+            testAudioChunk(
+                duration: 0.1,
+                timestamp: Double(index) * 0.1,
+                sampleValue: 0.001,
+                isSpeechLike: false,
+                metadataDuration: 0
+            )
+        )
+    }
+    await coordinator.ingest(
+        testAudioChunk(duration: 0.2, timestamp: 0.5, metadataDuration: 0)
+    )
+
+    try await eventually { await engine.inferenceWindows.count == 1 }
+    let window = try #require(await engine.inferenceWindows.first)
+    #expect(abs(window.timestamp - 0.3) < 0.001)
+    #expect(abs(window.duration - 0.4) < 0.001)
+    await coordinator.stop()
+}
+
+@Test
+func coordinatorRejectsAudioUntilModelFinishesLoading() async throws {
+    let engine = BlockingLoadWhisperEngine()
+    let coordinator = WhisperTranscriptionCoordinator(
+        engine: engine,
+        configuration: .init(silenceFlushDelay: 0.02)
+    )
+    let startTask = Task {
+        try await coordinator.start(
+            modelID: "fixture/whisper",
+            language: "English",
+            onTranscript: { _ in }
+        )
+    }
+
+    try await eventually { await engine.hasPendingLoad }
+    await coordinator.ingest(testAudioChunk(duration: 0.45, timestamp: 0))
+    await engine.completeLoad()
+    try await startTask.value
+    try await Task.sleep(for: .milliseconds(30))
+    #expect(await engine.inferenceWindows.isEmpty)
+
+    await coordinator.ingest(testAudioChunk(duration: 0.45, timestamp: 1))
+    try await eventually { await engine.inferenceWindows.count == 1 }
+    #expect(await engine.inferenceWindows.first?.timestamp == 1)
+    await coordinator.stop()
+}
+
+@Test
+func coordinatorDoesNotAcceptAudioAfterModelLoadFailure() async throws {
+    let engine = FailingLoadWhisperEngine()
+    let coordinator = WhisperTranscriptionCoordinator(engine: engine)
+
+    do {
+        try await coordinator.start(
+            modelID: "fixture/whisper",
+            language: "English",
+            onTranscript: { _ in }
+        )
+        Issue.record("Expected model loading to fail")
+    } catch {
+        // Expected.
+    }
+
+    await coordinator.ingest(testAudioChunk(duration: 1, timestamp: 0))
+    try await Task.sleep(for: .milliseconds(20))
+    #expect(await engine.inferenceCount == 0)
+}
+
+@Test
 func coordinatorPreservesQuietAudioAroundSpeechWithoutDeferringSilenceFlush() async throws {
     let engine = SequencingWhisperEngine()
     let coordinator = WhisperTranscriptionCoordinator(
@@ -381,6 +494,42 @@ private actor ScriptedWhisperEngine: WhisperEngineProtocol {
     }
 }
 
+private actor BlockingLoadWhisperEngine: WhisperEngineProtocol {
+    private var loadContinuation: CheckedContinuation<Void, Never>?
+    private(set) var inferenceWindows: [AudioChunk] = []
+
+    var hasPendingLoad: Bool { loadContinuation != nil }
+
+    func loadModel(named modelName: String) async throws {
+        await withCheckedContinuation { continuation in
+            loadContinuation = continuation
+        }
+    }
+
+    func completeLoad() {
+        loadContinuation?.resume()
+        loadContinuation = nil
+    }
+
+    func transcribe(_ chunk: AudioChunk, language: String) async throws -> Transcript? {
+        inferenceWindows.append(chunk)
+        return Transcript(text: "loaded", timestamp: chunk.timestamp)
+    }
+}
+
+private actor FailingLoadWhisperEngine: WhisperEngineProtocol {
+    private(set) var inferenceCount = 0
+
+    func loadModel(named modelName: String) async throws {
+        throw MLingoError.whisperModelLoadFailed("fixture failure")
+    }
+
+    func transcribe(_ chunk: AudioChunk, language: String) async throws -> Transcript? {
+        inferenceCount += 1
+        return nil
+    }
+}
+
 private actor TranscriptRecorder {
     private var values: [Transcript] = []
 
@@ -423,14 +572,15 @@ private func testAudioChunk(
     duration: TimeInterval,
     timestamp: TimeInterval,
     sampleValue: Float = 0.05,
-    isSpeechLike: Bool = true
+    isSpeechLike: Bool = true,
+    metadataDuration: TimeInterval? = nil
 ) -> AudioChunk {
     AudioChunk(
         samples: Array(repeating: sampleValue, count: Int((duration * 16_000).rounded())),
         sampleRate: 16_000,
         channelCount: 1,
         timestamp: timestamp,
-        duration: duration,
+        duration: metadataDuration ?? duration,
         isSpeechLike: isSpeechLike
     )
 }

@@ -105,6 +105,12 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
                 break
             }
 
+            guard hasMinimumNewSpeech(upTo: maximumSampleCount) else {
+                removeFirst(maximumSampleCount)
+                retainedOverlapSampleCount = 0
+                continue
+            }
+
             windows.append(
                 makeChunk(
                     samples: Array(samples.prefix(maximumSampleCount)),
@@ -169,17 +175,41 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
         guard lowerBound < upperBound else { return nil }
 
         var quietSampleCount = 0
+        let newSpeechStartIndex = min(retainedOverlapSampleCount, lowerBound)
+        var newSpeechSampleCount = speechFlags[newSpeechStartIndex..<lowerBound]
+            .lazy
+            .filter { $0 }
+            .count
         for index in lowerBound..<upperBound {
             if speechFlags[index] {
                 quietSampleCount = 0
+                if index >= retainedOverlapSampleCount {
+                    newSpeechSampleCount += 1
+                }
             } else {
                 quietSampleCount += 1
-                if quietSampleCount >= minimumQuietSampleCount {
+                if quietSampleCount >= minimumQuietSampleCount,
+                   newSpeechSampleCount >= minimumSpeechSampleCount
+                {
                     return index + 1
                 }
             }
         }
         return nil
+    }
+
+    private func hasMinimumNewSpeech(upTo sampleCount: Int) -> Bool {
+        let lowerBound = min(retainedOverlapSampleCount, speechFlags.count)
+        let upperBound = min(sampleCount, speechFlags.count)
+        guard lowerBound < upperBound else { return false }
+        let newSpeechSampleCount = speechFlags[lowerBound..<upperBound]
+            .lazy
+            .filter { $0 }
+            .count
+        let minimumSpeechSampleCount = Int(
+            (configuration.minimumSpeechDuration * sampleRate).rounded()
+        )
+        return newSpeechSampleCount >= minimumSpeechSampleCount
     }
 
     private mutating func removeFirst(_ count: Int) {

@@ -32,7 +32,10 @@ public final class CoreAudioTapEngine: AudioEngineProtocol, @unchecked Sendable 
     }
 
     init(hal: any CoreAudioHALProtocol) {
-        let (chunks, chunkContinuation) = AsyncStream.makeStream(of: AudioChunk.self)
+        let (chunks, chunkContinuation) = AsyncStream.makeStream(
+            of: AudioChunk.self,
+            bufferingPolicy: .bufferingNewest(10)
+        )
         let (diagnostics, diagnosticsContinuation) = AsyncStream.makeStream(
             of: AudioCaptureDiagnostics.self,
             bufferingPolicy: .bufferingNewest(1)

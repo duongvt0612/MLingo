@@ -11,6 +11,7 @@ public actor WhisperTranscriptionCoordinator {
     private var deduplicator = TranscriptDeduplicator()
     private var diagnostics = WhisperDiagnostics()
     private var sessionID: UUID?
+    private var acceptingAudio = false
     private var language = ""
     private var transcriptHandler: TranscriptHandler?
     private var diagnosticsHandler: DiagnosticsHandler?
@@ -51,6 +52,7 @@ public actor WhisperTranscriptionCoordinator {
 
         let newSessionID = UUID()
         sessionID = newSessionID
+        acceptingAudio = false
         self.language = language
         transcriptHandler = onTranscript
         diagnosticsHandler = onDiagnostics
@@ -65,23 +67,32 @@ public actor WhisperTranscriptionCoordinator {
         do {
             try await engine.loadModel(named: modelID)
         } catch is CancellationError {
+            if sessionID == newSessionID {
+                stop()
+            }
             throw CancellationError()
         } catch {
             guard sessionID == newSessionID else { throw CancellationError() }
             diagnostics.modelState = .failed(error.localizedDescription)
             await onDiagnostics(diagnostics)
+            guard sessionID == newSessionID else { throw CancellationError() }
+            stop()
             throw error
         }
 
         guard sessionID == newSessionID else { throw CancellationError() }
+        acceptingAudio = true
         diagnostics.modelState = .ready
         await onDiagnostics(diagnostics)
-
-        pendingWindows.removeAll(keepingCapacity: true)
     }
 
     public func ingest(_ chunk: AudioChunk) {
-        guard let sessionID else { return }
+        guard acceptingAudio,
+              let sessionID,
+              let chunkDuration = Self.sampleDuration(of: chunk)
+        else {
+            return
+        }
 
         if chunk.isSpeechLike {
             silenceTask?.cancel()
@@ -93,12 +104,12 @@ public actor WhisperTranscriptionCoordinator {
                 clearPreRoll()
             }
             append(chunk, sessionID: sessionID)
-            activeSpeechDuration += chunk.duration
+            activeSpeechDuration += chunkDuration
             scheduleSilenceFlush(sessionID: sessionID)
         } else if hasActiveSpeech {
             append(chunk, sessionID: sessionID)
         } else {
-            retainPreRoll(chunk)
+            retainPreRoll(chunk, duration: chunkDuration)
         }
     }
 
@@ -115,6 +126,7 @@ public actor WhisperTranscriptionCoordinator {
     }
 
     public func stop() {
+        acceptingAudio = false
         sessionID = nil
         silenceTask?.cancel()
         silenceTask = nil
@@ -131,7 +143,7 @@ public actor WhisperTranscriptionCoordinator {
     }
 
     private func flushForSilence(sessionID expectedSessionID: UUID) {
-        guard sessionID == expectedSessionID else { return }
+        guard acceptingAudio, sessionID == expectedSessionID else { return }
         if activeSpeechDuration >= configuration.minimumSpeechDuration,
            let window = accumulator.flushForSilence()
         {
@@ -144,23 +156,28 @@ public actor WhisperTranscriptionCoordinator {
     }
 
     private func append(_ chunk: AudioChunk, sessionID: UUID) {
+        guard acceptingAudio, self.sessionID == sessionID else { return }
         let windows = accumulator.append(chunk)
         for window in windows {
             enqueue(window, sessionID: sessionID)
         }
     }
 
-    private func retainPreRoll(_ chunk: AudioChunk) {
+    private func retainPreRoll(_ chunk: AudioChunk, duration chunkDuration: TimeInterval) {
         let maximumDuration = configuration.overlapDuration
         guard maximumDuration > 0 else { return }
 
         preRollChunks.append(chunk)
-        preRollDuration += chunk.duration
+        preRollDuration += chunkDuration
         while preRollDuration > maximumDuration, let firstChunk = preRollChunks.first {
-            let excessDuration = preRollDuration - maximumDuration
-            if excessDuration >= firstChunk.duration {
+            guard let firstChunkDuration = Self.sampleDuration(of: firstChunk) else {
                 preRollChunks.removeFirst()
-                preRollDuration -= firstChunk.duration
+                continue
+            }
+            let excessDuration = preRollDuration - maximumDuration
+            if excessDuration >= firstChunkDuration {
+                preRollChunks.removeFirst()
+                preRollDuration -= firstChunkDuration
                 continue
             }
 
@@ -194,7 +211,7 @@ public actor WhisperTranscriptionCoordinator {
     }
 
     private func enqueue(_ window: AudioChunk, sessionID expectedSessionID: UUID) {
-        guard sessionID == expectedSessionID else { return }
+        guard acceptingAudio, sessionID == expectedSessionID else { return }
 
         if processingTask == nil {
             processingTask = Task { [weak self] in
@@ -231,6 +248,7 @@ public actor WhisperTranscriptionCoordinator {
 
         var nextWindow: AudioChunk? = firstWindow
         while let window = nextWindow,
+              acceptingAudio,
               sessionID == expectedSessionID,
               !Task.isCancelled
         {
@@ -286,7 +304,7 @@ public actor WhisperTranscriptionCoordinator {
     }
 
     private func process(_ window: AudioChunk, sessionID expectedSessionID: UUID) async {
-        guard sessionID == expectedSessionID else { return }
+        guard acceptingAudio, sessionID == expectedSessionID else { return }
         let start = ContinuousClock.now
 
         do {
@@ -344,6 +362,17 @@ public actor WhisperTranscriptionCoordinator {
                 await errorHandler(error.localizedDescription)
             }
         }
+    }
+
+    private static func sampleDuration(of chunk: AudioChunk) -> TimeInterval? {
+        guard chunk.sampleRate.isFinite,
+              chunk.sampleRate > 0,
+              chunk.channelCount == 1,
+              !chunk.samples.isEmpty
+        else {
+            return nil
+        }
+        return Double(chunk.samples.count) / chunk.sampleRate
     }
 }
 

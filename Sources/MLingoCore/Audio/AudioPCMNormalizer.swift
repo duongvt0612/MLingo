@@ -173,79 +173,16 @@ enum AudioPCMNormalizer {
         guard sourceSampleRate > 0, targetSampleRate > 0, !samples.isEmpty else {
             return nil
         }
-        guard
-            let sourceFormat = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: sourceSampleRate,
-                channels: AVAudioChannelCount(targetChannelCount),
-                interleaved: false
-            ),
-            let targetFormat = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: targetSampleRate,
-                channels: AVAudioChannelCount(targetChannelCount),
-                interleaved: false
-            ),
-            let converter = AVAudioConverter(from: sourceFormat, to: targetFormat),
-            let sourceBuffer = AVAudioPCMBuffer(
-                pcmFormat: sourceFormat,
-                frameCapacity: AVAudioFrameCount(samples.count)
-            )
-        else {
-            return nil
-        }
-
-        sourceBuffer.frameLength = AVAudioFrameCount(samples.count)
-        guard let sourceChannel = sourceBuffer.floatChannelData?[0] else { return nil }
-        for index in samples.indices {
-            sourceChannel[index] = samples[index]
-        }
-
-        let ratio = targetSampleRate / sourceSampleRate
-        let outputCapacity = max(AVAudioFrameCount(ceil(Double(samples.count) * ratio)) + 32, 1)
-        guard let outputBuffer = AVAudioPCMBuffer(
-            pcmFormat: targetFormat,
-            frameCapacity: outputCapacity
-        ) else {
-            return nil
-        }
-
-        let inputProvider = AudioConverterInputProvider(sourceBuffer: sourceBuffer)
-        var conversionError: NSError?
-        let status = converter.convert(to: outputBuffer, error: &conversionError) { _, outStatus in
-            inputProvider.nextBuffer(outStatus: outStatus)
-        }
-        guard
-            status != .error,
-            conversionError == nil,
-            let outputChannel = outputBuffer.floatChannelData?[0]
-        else {
-            if let conversionError {
-                MLingoLogger.audio.error(
-                    "Audio resampling failed: \(conversionError.localizedDescription, privacy: .public)"
-                )
-            }
-            return nil
-        }
-        return Array(UnsafeBufferPointer(start: outputChannel, count: Int(outputBuffer.frameLength)))
-    }
-}
-
-private final class AudioConverterInputProvider: @unchecked Sendable {
-    private let sourceBuffer: AVAudioPCMBuffer
-    private var didProvideSource = false
-
-    init(sourceBuffer: AVAudioPCMBuffer) {
-        self.sourceBuffer = sourceBuffer
-    }
-
-    func nextBuffer(outStatus: UnsafeMutablePointer<AVAudioConverterInputStatus>) -> AVAudioBuffer? {
-        guard !didProvideSource else {
-            outStatus.pointee = .endOfStream
-            return nil
-        }
-        didProvideSource = true
-        outStatus.pointee = .haveData
-        return sourceBuffer
+        guard let converter = MonoFloat32Resampling.makeConverter(
+            sourceSampleRate: sourceSampleRate,
+            targetSampleRate: targetSampleRate
+        ) else { return nil }
+        return MonoFloat32Resampling.convert(
+            samples,
+            using: converter,
+            outputCapacityPadding: 32,
+            exhaustedInputStatus: .endOfStream,
+            logErrors: true
+        )
     }
 }

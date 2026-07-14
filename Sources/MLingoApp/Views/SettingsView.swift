@@ -4,11 +4,17 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var viewModel: MLingoViewModel
     @Environment(\.dismiss) private var dismiss
+    @State private var draftSettings: AppSettings
+
+    init(viewModel: MLingoViewModel) {
+        self.viewModel = viewModel
+        _draftSettings = State(initialValue: viewModel.settings)
+    }
 
     var body: some View {
         Form {
             Section {
-                Picker("Capture audio using", selection: $viewModel.settings.audioCaptureBackend) {
+                Picker("Capture audio using", selection: $draftSettings.audioCaptureBackend) {
                     ForEach(AudioCaptureBackend.allCases) { backend in
                         Text(backend.displayName).tag(backend)
                     }
@@ -27,17 +33,17 @@ struct SettingsView: View {
                     .textContentType(.password)
                     .accessibilityLabel("OpenAI API key")
 
-                TextField("Model", text: $viewModel.settings.openAIModel)
+                TextField("Model", text: $draftSettings.openAIModel)
                     .accessibilityLabel("OpenAI translation model")
             }
 
             Section("Whisper") {
-                TextField("Model", text: $viewModel.settings.whisperModel)
+                TextField("Model", text: $draftSettings.whisperModel)
                     .accessibilityLabel("Whisper model")
             }
 
             Section("Subtitles") {
-                Slider(value: $viewModel.settings.subtitleFontSize, in: 18...64, step: 1) {
+                Slider(value: $draftSettings.subtitleFontSize, in: 18...64, step: 1) {
                     Text("Font size")
                 } minimumValueLabel: {
                     Text("18")
@@ -45,7 +51,7 @@ struct SettingsView: View {
                     Text("64")
                 }
 
-                Slider(value: $viewModel.settings.subtitleBackgroundOpacity, in: 0.2...0.9, step: 0.01) {
+                Slider(value: $draftSettings.subtitleBackgroundOpacity, in: 0.2...0.9, step: 0.01) {
                     Text("Background opacity")
                 } minimumValueLabel: {
                     Text("20%")
@@ -53,16 +59,16 @@ struct SettingsView: View {
                     Text("90%")
                 }
 
-                Toggle("Show bilingual subtitles", isOn: $viewModel.settings.showBilingualSubtitles)
+                Toggle("Show bilingual subtitles", isOn: $draftSettings.showBilingualSubtitles)
             }
 
             Section("Languages") {
-                TextField("Source language", text: $viewModel.settings.sourceLanguage)
-                TextField("Target language", text: $viewModel.settings.targetLanguage)
+                TextField("Source language", text: $draftSettings.sourceLanguage)
+                TextField("Target language", text: $draftSettings.targetLanguage)
             }
 
             Section("Appearance") {
-                Picker("Theme", selection: $viewModel.settings.theme) {
+                Picker("Theme", selection: $draftSettings.theme) {
                     ForEach(AppTheme.allCases, id: \.self) { theme in
                         Text(theme.rawValue.capitalized).tag(theme)
                     }
@@ -76,8 +82,9 @@ struct SettingsView: View {
                 }
                 Button("Save") {
                     Task {
-                        await viewModel.save()
-                        dismiss()
+                        if await viewModel.save(draftSettings) {
+                            dismiss()
+                        }
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -86,13 +93,10 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-        .task {
-            await viewModel.load()
-        }
     }
 
     private var audioCaptureHelpText: String {
-        switch viewModel.settings.audioCaptureBackend {
+        switch draftSettings.audioCaptureBackend {
         case .coreAudioTap:
             if #available(macOS 14.2, *) {
                 "Captures system audio directly and requires System Audio Recording permission."
