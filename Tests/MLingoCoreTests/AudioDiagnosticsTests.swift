@@ -1,4 +1,5 @@
 import AudioToolbox
+@preconcurrency import AVFoundation
 import Foundation
 import Testing
 @testable import MLingoCore
@@ -87,6 +88,34 @@ func pcmNormalizerDownmixesStereoFloat32() {
     }
 
     #expect(normalized == [0, 0.5, 0.25])
+}
+
+@Test
+func pcmNormalizerDownmixesNonInterleavedStereoBuffers() throws {
+    let format = try #require(
+        AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 16_000,
+            channels: 2,
+            interleaved: false
+        )
+    )
+    let buffer = try #require(
+        AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 2)
+    )
+    buffer.frameLength = 2
+    let channelData = try #require(buffer.floatChannelData)
+    channelData[0][0] = 1
+    channelData[0][1] = 0.25
+    channelData[1][0] = -1
+    channelData[1][1] = 0.75
+
+    let normalized = AudioPCMNormalizer.normalize(
+        bufferList: buffer.audioBufferList,
+        streamDescription: format.streamDescription.pointee
+    )
+
+    #expect(normalized == [0, 0.5])
 }
 
 @Test
