@@ -37,7 +37,8 @@ public final class FloatingSubtitleWindowController: OverlayEngineProtocol {
         placementSaveDelay: Duration,
         observesScreenChanges: Bool,
         applicationWindowProvider: @escaping @MainActor () -> NSWindow? = {
-            NSApp.mainWindow ?? NSApp.keyWindow
+            let application = NSApplication.shared
+            return application.mainWindow ?? application.keyWindow
         },
         panelFactory: @escaping PanelFactory
     ) {

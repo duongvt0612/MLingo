@@ -24,7 +24,8 @@ final class AppKitOverlayDisplayCatalog: OverlayDisplayCatalogProtocol {
     }
 
     func currentAppWindowDisplayID() -> String? {
-        let screen = NSApp.mainWindow?.screen ?? NSApp.keyWindow?.screen
+        let application = NSApplication.shared
+        let screen = application.mainWindow?.screen ?? application.keyWindow?.screen
         return screen.flatMap(Self.stableID(for:))
     }
 
