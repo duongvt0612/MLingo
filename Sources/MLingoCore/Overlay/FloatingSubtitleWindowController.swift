@@ -17,6 +17,7 @@ public final class FloatingSubtitleWindowController: OverlayEngineProtocol {
     private var lastSettings = AppSettings()
     private var placementSaveTask: Task<Void, Never>?
     private var screenObserver: OverlayScreenObservation?
+    private var applicationWindowScreenObserver: OverlayScreenObservation?
     private var escapeMonitor: OverlayEventMonitor?
     private var isApplyingFrame = false
 
@@ -35,6 +36,9 @@ public final class FloatingSubtitleWindowController: OverlayEngineProtocol {
         displayCatalog: any OverlayDisplayCatalogProtocol,
         placementSaveDelay: Duration,
         observesScreenChanges: Bool,
+        applicationWindowProvider: @escaping @MainActor () -> NSWindow? = {
+            NSApp.mainWindow ?? NSApp.keyWindow
+        },
         panelFactory: @escaping PanelFactory
     ) {
         self.preferencesStore = preferencesStore
@@ -57,6 +61,24 @@ public final class FloatingSubtitleWindowController: OverlayEngineProtocol {
                 Task { @MainActor in self?.refreshDisplays() }
             }
             screenObserver = OverlayScreenObservation(token: token)
+
+            let windowToken = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeScreenNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let window = notification.object as? NSWindow else { return }
+                let windowID = ObjectIdentifier(window)
+                Task { @MainActor in
+                    guard let applicationWindow = applicationWindowProvider(),
+                          ObjectIdentifier(applicationWindow) == windowID
+                    else {
+                        return
+                    }
+                    self?.refreshDisplays()
+                }
+            }
+            applicationWindowScreenObserver = OverlayScreenObservation(token: windowToken)
         }
     }
 
@@ -234,6 +256,7 @@ public final class FloatingSubtitleWindowController: OverlayEngineProtocol {
         placementSaveTask = Task {
             do {
                 try await Task.sleep(for: delay)
+                try Task.checkCancellation()
             } catch {
                 return
             }

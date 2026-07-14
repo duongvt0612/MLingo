@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import MLingoCore
@@ -321,6 +322,57 @@ func floatingOverlayResizesUpwardAndClampsToVisibleFrame() {
     #expect(panel.frame.size == panel.fittingSize)
     #expect(panel.frame.minY == testMainDisplay.visibleFrame.minY + 56)
     #expect(testMainDisplay.visibleFrame.contains(panel.frame))
+}
+
+@Test @MainActor
+func floatingOverlayRefreshesAutomaticDisplayWhenApplicationWindowChangesScreen() async throws {
+    let external = OverlayDisplayDescriptor(
+        id: "external",
+        name: "Studio Display",
+        visibleFrame: CGRect(x: 1_440, y: 0, width: 2_560, height: 1_440),
+        isMain: false
+    )
+    let applicationWindow = NSWindow(
+        contentRect: CGRect(x: 0, y: 0, width: 800, height: 600),
+        styleMask: .titled,
+        backing: .buffered,
+        defer: false
+    )
+    let unrelatedWindow = NSWindow(
+        contentRect: CGRect(x: 0, y: 0, width: 400, height: 300),
+        styleMask: .titled,
+        backing: .buffered,
+        defer: false
+    )
+    let catalog = TestOverlayDisplayCatalog(
+        displays: [testMainDisplay, external],
+        appWindowDisplayID: testMainDisplay.id
+    )
+    let controller = FloatingSubtitleWindowController(
+        preferencesStore: TestOverlayPreferencesStore(),
+        displayCatalog: catalog,
+        placementSaveDelay: .zero,
+        observesScreenChanges: true,
+        applicationWindowProvider: { applicationWindow },
+        panelFactory: { TestOverlayPanel(frame: $0) }
+    )
+
+    #expect(controller.presentationState.activeDisplayID == testMainDisplay.id)
+    catalog.appWindowDisplayID = external.id
+
+    NotificationCenter.default.post(
+        name: NSWindow.didChangeScreenNotification,
+        object: unrelatedWindow
+    )
+    try await Task.sleep(for: .milliseconds(10))
+    #expect(controller.presentationState.activeDisplayID == testMainDisplay.id)
+
+    NotificationCenter.default.post(
+        name: NSWindow.didChangeScreenNotification,
+        object: applicationWindow
+    )
+    try await Task.sleep(for: .milliseconds(10))
+    #expect(controller.presentationState.activeDisplayID == external.id)
 }
 
 private let testMainDisplay = OverlayDisplayDescriptor(
