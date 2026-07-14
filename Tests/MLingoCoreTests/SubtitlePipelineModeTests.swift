@@ -12,7 +12,7 @@ func transcriptionOnlyEmitsTranscriptWithoutTranslationOrOverlay() async throws 
     let transcriptRecorder = PipelineTranscriptRecorder()
     let diagnosticsRecorder = PipelineDiagnosticsRecorder()
     let pipeline = SubtitlePipeline(
-        audioEngine: audio,
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: whisper,
         translationEngine: translation,
         overlayEngine: overlay,
@@ -52,7 +52,7 @@ func translationModePreservesTranslationAndOverlayFlow() async throws {
     let overlay = PipelineOverlayEngine()
     let settings = PipelineSettingsStore()
     let pipeline = SubtitlePipeline(
-        audioEngine: audio,
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: whisper,
         translationEngine: translation,
         overlayEngine: overlay,
@@ -81,7 +81,7 @@ func audioDiagnosticsSkipStaleSnapshotsWhenUIIsBusy() async throws {
     let audio = PipelineAudioEngine()
     let recorder = SlowAudioDiagnosticsRecorder()
     let pipeline = SubtitlePipeline(
-        audioEngine: audio,
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: PipelineWhisperEngine(text: "unused"),
         translationEngine: PipelineTranslationEngine(),
         overlayEngine: PipelineOverlayEngine(),
@@ -112,11 +112,81 @@ func audioDiagnosticsSkipStaleSnapshotsWhenUIIsBusy() async throws {
     await pipeline.stop()
 }
 
+@Test @MainActor
+func restartUsesFreshAudioEngineAndIgnoresPreviousSessionCallbacks() async throws {
+    let firstAudio = PipelineAudioEngine()
+    let secondAudio = PipelineAudioEngine()
+    let factory = PipelineAudioEngineFactory(engines: [firstAudio, secondAudio])
+    let transcripts = PipelineTranscriptRecorder()
+    let diagnostics = PipelineAudioDiagnosticsRecorder()
+    let pipeline = SubtitlePipeline(
+        audioEngineFactory: factory,
+        whisperEngine: PipelineWhisperEngine(text: "Restart transcript"),
+        translationEngine: PipelineTranslationEngine(),
+        overlayEngine: PipelineOverlayEngine(),
+        settingsStore: PipelineSettingsStore()
+    )
+
+    await pipeline.start(
+        mode: .transcriptionOnly,
+        onError: { _ in },
+        onAudioDiagnostics: { value in await diagnostics.append(value) },
+        onTranscript: { value in await transcripts.append(value) }
+    )
+    firstAudio.yield(pipelineAudioChunk(timestamp: 1))
+    try await pipelineEventually { await transcripts.count == 1 }
+    await pipeline.stop()
+
+    await pipeline.start(
+        mode: .transcriptionOnly,
+        onError: { _ in },
+        onAudioDiagnostics: { value in await diagnostics.append(value) },
+        onTranscript: { value in await transcripts.append(value) }
+    )
+    secondAudio.yieldDiagnostics(capturedChunkCount: 2)
+    secondAudio.yield(pipelineAudioChunk(timestamp: 10))
+    try await pipelineEventually {
+        let transcriptCount = await transcripts.count
+        let capturedChunkCount = await diagnostics.latestCapturedChunkCount
+        return transcriptCount == 2 && capturedChunkCount == 2
+    }
+
+    firstAudio.yieldDiagnostics(capturedChunkCount: 99)
+    firstAudio.yield(pipelineAudioChunk(timestamp: 99))
+    try await Task.sleep(for: .milliseconds(50))
+
+    #expect(factory.makeCount == 2)
+    #expect(firstAudio.stopCount == 1)
+    #expect(secondAudio.startCount == 1)
+    #expect(await transcripts.count == 2)
+    #expect(await diagnostics.latestCapturedChunkCount == 2)
+    await pipeline.stop()
+}
+
+private final class PipelineAudioEngineFactory: AudioEngineFactoryProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private var engines: [PipelineAudioEngine]
+    private(set) var makeCount = 0
+
+    init(engines: [PipelineAudioEngine]) {
+        self.engines = engines
+    }
+
+    func makeAudioEngine() -> any AudioEngineProtocol {
+        lock.withLock {
+            makeCount += 1
+            return engines.removeFirst()
+        }
+    }
+}
+
 private final class PipelineAudioEngine: AudioEngineProtocol, @unchecked Sendable {
     let chunks: AsyncStream<AudioChunk>
     let diagnostics: AsyncStream<AudioCaptureDiagnostics>
     private let chunkContinuation: AsyncStream<AudioChunk>.Continuation
     private let diagnosticsContinuation: AsyncStream<AudioCaptureDiagnostics>.Continuation
+    private(set) var startCount = 0
+    private(set) var stopCount = 0
 
     init() {
         let (chunks, chunkContinuation) = AsyncStream.makeStream(of: AudioChunk.self)
@@ -132,8 +202,8 @@ private final class PipelineAudioEngine: AudioEngineProtocol, @unchecked Sendabl
 
     var state: AudioCaptureState { get async { .running } }
 
-    func start() async throws {}
-    func stop() async {}
+    func start() async throws { startCount += 1 }
+    func stop() async { stopCount += 1 }
 
     func yield(_ chunk: AudioChunk) {
         chunkContinuation.yield(chunk)
@@ -146,6 +216,18 @@ private final class PipelineAudioEngine: AudioEngineProtocol, @unchecked Sendabl
                 state: .running
             )
         )
+    }
+}
+
+private actor PipelineAudioDiagnosticsRecorder {
+    private var values: [AudioCaptureDiagnostics] = []
+
+    var latestCapturedChunkCount: Int {
+        values.last?.capturedChunkCount ?? 0
+    }
+
+    func append(_ diagnostics: AudioCaptureDiagnostics) {
+        values.append(diagnostics)
     }
 }
 
