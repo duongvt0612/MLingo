@@ -84,8 +84,7 @@ public final class FloatingSubtitleWindowController: OverlayEngineProtocol {
     }
 
     public func hide() {
-        placementSaveTask?.cancel()
-        placementSaveTask = nil
+        flushPendingPlacementSave()
         lastSubtitle = nil
         presentationState.isEditing = false
         presentationState.isVisible = false
@@ -120,6 +119,7 @@ public final class FloatingSubtitleWindowController: OverlayEngineProtocol {
 
     public func endRepositioning() {
         guard presentationState.isEditing else { return }
+        flushPendingPlacementSave()
         presentationState.isEditing = false
         panel?.ignoresMouseEvents = true
         removeEscapeMonitor()
@@ -128,12 +128,14 @@ public final class FloatingSubtitleWindowController: OverlayEngineProtocol {
 
     public func resetPosition() {
         guard let displayID = presentationState.activeDisplayID else { return }
+        flushPendingPlacementSave()
         preferences.placementsByDisplayID[displayID] = nil
         preferencesStore.save(preferences)
         renderAndResize()
     }
 
     public func selectDisplay(_ selection: OverlayDisplaySelection) {
+        flushPendingPlacementSave()
         preferences.selectedDisplay = selection
         preferencesStore.save(preferences)
         presentationState.selectedDisplay = selection
@@ -237,6 +239,13 @@ public final class FloatingSubtitleWindowController: OverlayEngineProtocol {
             }
             preferencesStore.save(preferences)
         }
+    }
+
+    private func flushPendingPlacementSave() {
+        guard placementSaveTask != nil else { return }
+        placementSaveTask?.cancel()
+        placementSaveTask = nil
+        preferencesStore.save(preferences)
     }
 
     private func installEscapeMonitor() {
