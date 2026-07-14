@@ -80,7 +80,9 @@ public final class SubtitlePipeline {
             )
             guard sessionID == newSessionID else { return }
 
-            let audioEngine = audioEngineFactory.makeAudioEngine()
+            let audioEngine = audioEngineFactory.makeAudioEngine(
+                preferredBackend: settings.audioCaptureBackend
+            )
             activeAudioEngine = audioEngine
             try await audioEngine.start()
             guard sessionID == newSessionID else {

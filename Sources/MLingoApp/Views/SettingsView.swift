@@ -7,6 +7,21 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section {
+                Picker("Capture audio using", selection: $viewModel.settings.audioCaptureBackend) {
+                    ForEach(AudioCaptureBackend.allCases) { backend in
+                        Text(backend.displayName).tag(backend)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                .accessibilityLabel("Audio capture backend")
+            } header: {
+                Text("Audio capture")
+            } footer: {
+                Text(audioCaptureHelpText)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("OpenAI") {
                 SecureField("API key", text: $viewModel.apiKey)
                     .textContentType(.password)
@@ -73,6 +88,19 @@ struct SettingsView: View {
         .padding()
         .task {
             await viewModel.load()
+        }
+    }
+
+    private var audioCaptureHelpText: String {
+        switch viewModel.settings.audioCaptureBackend {
+        case .coreAudioTap:
+            if #available(macOS 14.2, *) {
+                "Captures system audio directly and requires System Audio Recording permission."
+            } else {
+                "Requires macOS 14.2 or newer. On this macOS version, MLingo uses Screen Recording instead."
+            }
+        case .screenCaptureKit:
+            "Captures system audio through ScreenCaptureKit and requires Screen Recording permission."
         }
     }
 }

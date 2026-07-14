@@ -129,7 +129,9 @@ final class MLingoViewModel {
         startTask = Task {
             defer { clearStartTask(for: sessionID) }
 
-            let audioEngine = audioEngineFactory.makeAudioEngine()
+            let audioEngine = audioEngineFactory.makeAudioEngine(
+                preferredBackend: settings.audioCaptureBackend
+            )
             soundTestEngine = audioEngine
             soundDiagnosticsTask = Task { [weak self, audioEngine, sessionID] in
                 for await diagnostics in audioEngine.diagnostics {

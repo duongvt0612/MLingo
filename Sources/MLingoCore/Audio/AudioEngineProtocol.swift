@@ -1,15 +1,17 @@
 import Foundation
 
-public enum AudioCaptureBackend: String, Equatable, Sendable {
+public enum AudioCaptureBackend: String, Codable, CaseIterable, Equatable, Identifiable, Sendable {
     case coreAudioTap
     case screenCaptureKit
+
+    public var id: Self { self }
 
     public var displayName: String {
         switch self {
         case .coreAudioTap:
-            "Core Audio tap"
+            "System Audio"
         case .screenCaptureKit:
-            "ScreenCaptureKit"
+            "Screen Recording"
         }
     }
 
@@ -87,7 +89,7 @@ public protocol AudioEngineProtocol: AnyObject, Sendable {
 }
 
 public protocol AudioEngineFactoryProtocol: Sendable {
-    func makeAudioEngine() -> any AudioEngineProtocol
+    func makeAudioEngine(preferredBackend: AudioCaptureBackend) -> any AudioEngineProtocol
 }
 
 public struct SystemAudioEngineFactory: AudioEngineFactoryProtocol {
@@ -116,8 +118,10 @@ public struct SystemAudioEngineFactory: AudioEngineFactoryProtocol {
         self.makeScreenCaptureKitEngine = makeScreenCaptureKitEngine
     }
 
-    public func makeAudioEngine() -> any AudioEngineProtocol {
-        if isCoreAudioTapAvailable {
+    public func makeAudioEngine(
+        preferredBackend: AudioCaptureBackend
+    ) -> any AudioEngineProtocol {
+        if preferredBackend == .coreAudioTap, isCoreAudioTapAvailable {
             makeCoreAudioTapEngine()
         } else {
             makeScreenCaptureKitEngine()
