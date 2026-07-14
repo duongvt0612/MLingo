@@ -261,6 +261,39 @@ func floatingOverlayPersistsDraggedPlacementAndResetReturnsToDefault() async thr
     #expect(panel.frame.minY == testMainDisplay.visibleFrame.minY + 56)
 }
 
+@Test @MainActor
+func floatingOverlayDoesNotLetDebouncedMoveOverwriteDisplaySelection() async throws {
+    let external = OverlayDisplayDescriptor(
+        id: "external",
+        name: "Studio Display",
+        visibleFrame: CGRect(x: 1_440, y: 0, width: 2_560, height: 1_440),
+        isMain: false
+    )
+    let store = TestOverlayPreferencesStore()
+    let panel = TestOverlayPanel(frame: .zero)
+    let controller = FloatingSubtitleWindowController(
+        preferencesStore: store,
+        displayCatalog: TestOverlayDisplayCatalog(displays: [testMainDisplay, external]),
+        placementSaveDelay: .milliseconds(50),
+        observesScreenChanges: false,
+        panelFactory: { frame in
+            panel.frame = frame
+            return panel
+        }
+    )
+
+    controller.show(settings: AppSettings())
+    controller.beginRepositioning()
+    panel.simulateMove(
+        to: CGRect(x: 620, y: 240, width: panel.frame.width, height: panel.frame.height)
+    )
+    controller.selectDisplay(.display(id: external.id))
+    try await Task.sleep(for: .milliseconds(100))
+
+    #expect(store.preferences.selectedDisplay == .display(id: external.id))
+    #expect(store.preferences.placementsByDisplayID[testMainDisplay.id] != nil)
+}
+
 private let testMainDisplay = OverlayDisplayDescriptor(
     id: "main",
     name: "Built-in Display",
