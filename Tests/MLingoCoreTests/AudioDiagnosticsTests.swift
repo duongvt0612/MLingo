@@ -153,6 +153,29 @@ func pcmNormalizerResamplesToSixteenKilohertz() {
 }
 
 @Test
+func coreAudioBatcherCombinesRealtimeCallbacksWithoutDroppingSamples() {
+    var batcher = CoreAudioSampleBatcher(targetDuration: 0.1)
+    var batches: [CoreAudioSampleBatch] = []
+
+    for callbackIndex in 0..<21 {
+        batches.append(
+            contentsOf: batcher.append(
+                samples: Array(repeating: Float(callbackIndex), count: 480),
+                sampleRate: 48_000,
+                timestamp: Double(callbackIndex) * 0.01
+            )
+        )
+    }
+
+    #expect(batches.count == 2)
+    #expect(batches.map(\.samples.count) == [4_800, 4_800])
+    #expect(abs(batches[0].timestamp - 0) < 0.0001)
+    #expect(abs(batches[1].timestamp - 0.1) < 0.0001)
+    #expect(batcher.bufferedSampleCount == 480)
+    #expect(batches.flatMap(\.samples).count + batcher.bufferedSampleCount == 10_080)
+}
+
+@Test
 func diagnosticsStreamDropsStaleSnapshots() async {
     let (stream, continuation) = ScreenCaptureAudioEngine.makeDiagnosticsStream()
 
