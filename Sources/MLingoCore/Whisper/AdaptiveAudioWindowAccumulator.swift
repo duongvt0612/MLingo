@@ -6,31 +6,36 @@ struct AdaptiveAudioWindowConfiguration: Equatable, Sendable {
     let maximumWindowDuration: TimeInterval
     let silenceFlushDelay: TimeInterval
     let overlapDuration: TimeInterval
+    let minimumQuietBoundaryDuration: TimeInterval
 
     init(
         minimumSpeechDuration: TimeInterval = 0.4,
         preferredWindowDuration: TimeInterval = 1.5,
         maximumWindowDuration: TimeInterval = 3.0,
         silenceFlushDelay: TimeInterval = 0.5,
-        overlapDuration: TimeInterval = 0.4
+        overlapDuration: TimeInterval = 0.4,
+        minimumQuietBoundaryDuration: TimeInterval = 0.1
     ) {
         precondition(minimumSpeechDuration > 0)
         precondition(preferredWindowDuration >= minimumSpeechDuration)
         precondition(maximumWindowDuration >= preferredWindowDuration)
         precondition(silenceFlushDelay > 0)
         precondition(overlapDuration >= 0 && overlapDuration < maximumWindowDuration)
+        precondition(minimumQuietBoundaryDuration > 0)
 
         self.minimumSpeechDuration = minimumSpeechDuration
         self.preferredWindowDuration = preferredWindowDuration
         self.maximumWindowDuration = maximumWindowDuration
         self.silenceFlushDelay = silenceFlushDelay
         self.overlapDuration = overlapDuration
+        self.minimumQuietBoundaryDuration = minimumQuietBoundaryDuration
     }
 }
 
 struct AdaptiveAudioWindowAccumulator: Sendable {
     private let configuration: AdaptiveAudioWindowConfiguration
     private var samples: [Float] = []
+    private var speechFlags: [Bool] = []
     private var sampleRate: Double = 16_000
     private var channelCount = 1
     private var startTimestamp: TimeInterval = 0
@@ -66,23 +71,52 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
         }
 
         samples.append(contentsOf: chunk.samples)
+        speechFlags.append(
+            contentsOf: repeatElement(chunk.isSpeechLike, count: chunk.samples.count)
+        )
 
         let preferredSampleCount = Int((configuration.preferredWindowDuration * sampleRate).rounded())
         let maximumSampleCount = Int((configuration.maximumWindowDuration * sampleRate).rounded())
-        let targetSampleCount = min(preferredSampleCount, maximumSampleCount)
         let overlapSampleCount = Int((configuration.overlapDuration * sampleRate).rounded())
+        let minimumQuietSampleCount = max(
+            1,
+            Int((configuration.minimumQuietBoundaryDuration * sampleRate).rounded())
+        )
         var windows: [AudioChunk] = []
 
-        while targetSampleCount > 0, samples.count >= targetSampleCount {
-            let windowSamples = Array(samples.prefix(targetSampleCount))
-            windows.append(makeChunk(samples: windowSamples, timestamp: startTimestamp))
+        while preferredSampleCount > 0, samples.count >= preferredSampleCount {
+            if let boundarySampleCount = quietBoundarySampleCount(
+                preferredSampleCount: preferredSampleCount,
+                maximumSampleCount: maximumSampleCount,
+                minimumQuietSampleCount: minimumQuietSampleCount
+            ) {
+                windows.append(
+                    makeChunk(
+                        samples: Array(samples.prefix(boundarySampleCount)),
+                        timestamp: startTimestamp
+                    )
+                )
+                removeFirst(boundarySampleCount)
+                retainedOverlapSampleCount = 0
+                continue
+            }
+
+            guard maximumSampleCount > 0, samples.count >= maximumSampleCount else {
+                break
+            }
+
+            windows.append(
+                makeChunk(
+                    samples: Array(samples.prefix(maximumSampleCount)),
+                    timestamp: startTimestamp
+                )
+            )
 
             let retainedStartIndex = Self.retainedStartIndex(
-                maximumSampleCount: targetSampleCount,
+                maximumSampleCount: maximumSampleCount,
                 overlapSampleCount: overlapSampleCount
             )
-            samples.removeFirst(retainedStartIndex)
-            startTimestamp += Double(retainedStartIndex) / sampleRate
+            removeFirst(retainedStartIndex)
             retainedOverlapSampleCount = min(overlapSampleCount, samples.count)
         }
 
@@ -98,7 +132,11 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
 
     mutating func flushForSilence() -> AudioChunk? {
         defer { reset() }
-        let newSpeechSampleCount = samples.count - retainedOverlapSampleCount
+        let newSpeechSampleCount = speechFlags
+            .dropFirst(retainedOverlapSampleCount)
+            .lazy
+            .filter { $0 }
+            .count
         let newSpeechDuration = Double(newSpeechSampleCount) / sampleRate
         guard newSpeechDuration >= configuration.minimumSpeechDuration else {
             return nil
@@ -109,8 +147,45 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
 
     mutating func reset() {
         samples.removeAll(keepingCapacity: true)
+        speechFlags.removeAll(keepingCapacity: true)
         startTimestamp = 0
         retainedOverlapSampleCount = 0
+    }
+
+    private func quietBoundarySampleCount(
+        preferredSampleCount: Int,
+        maximumSampleCount: Int,
+        minimumQuietSampleCount: Int
+    ) -> Int? {
+        let lookbackSampleCount = Int((configuration.overlapDuration * sampleRate).rounded())
+        let minimumSpeechSampleCount = Int(
+            (configuration.minimumSpeechDuration * sampleRate).rounded()
+        )
+        let lowerBound = max(
+            minimumSpeechSampleCount,
+            preferredSampleCount - lookbackSampleCount
+        )
+        let upperBound = min(samples.count, maximumSampleCount)
+        guard lowerBound < upperBound else { return nil }
+
+        var quietSampleCount = 0
+        for index in lowerBound..<upperBound {
+            if speechFlags[index] {
+                quietSampleCount = 0
+            } else {
+                quietSampleCount += 1
+                if quietSampleCount >= minimumQuietSampleCount {
+                    return index + 1
+                }
+            }
+        }
+        return nil
+    }
+
+    private mutating func removeFirst(_ count: Int) {
+        samples.removeFirst(count)
+        speechFlags.removeFirst(count)
+        startTimestamp += Double(count) / sampleRate
     }
 
     private func makeChunk(samples: [Float], timestamp: TimeInterval) -> AudioChunk {

@@ -226,7 +226,7 @@ func coordinatorPreservesPendingAudioWhenInferenceFallsBehind() async throws {
 
     let windows = await engine.inferenceWindows
     #expect(abs(windows[1].duration - 3.0) < 0.001)
-    #expect(abs(windows[1].timestamp - 2.6) < 0.001)
+    #expect(abs(windows[1].timestamp - 2.8) < 0.001)
 
     await engine.completePendingInference(text: "second")
     try await eventually {
@@ -241,7 +241,7 @@ func coordinatorPreservesPendingAudioWhenInferenceFallsBehind() async throws {
     }
     let secondWindowEnd = preservedWindows[1].timestamp + preservedWindows[1].duration
     #expect(preservedWindows[2].timestamp < secondWindowEnd)
-    #expect(abs(preservedWindows[2].timestamp - 5.2) < 0.001)
+    #expect(abs(preservedWindows[2].timestamp - 5.6) < 0.001)
 
     await coordinator.stop()
     await engine.completePendingInference(text: "cancelled")
