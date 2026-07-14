@@ -139,7 +139,7 @@ func pipelineProxiesOverlayCommandsOnlyDuringTranslationSession() async {
     pipeline.resetOverlayPosition()
     pipeline.selectOverlayDisplay(.display(id: "external"))
 
-    #expect(overlay.commandCount == 0)
+    #expect(overlay.commandCount == 1)
 
     let started = await pipeline.start(mode: .translation, onError: { _ in })
     #expect(started)
@@ -151,7 +151,7 @@ func pipelineProxiesOverlayCommandsOnlyDuringTranslationSession() async {
     pipeline.resetOverlayPosition()
     pipeline.selectOverlayDisplay(.display(id: "external"))
 
-    #expect(overlay.commandCount == 5)
+    #expect(overlay.commandCount == 6)
 
     await pipeline.stop()
     #expect(overlay.hideCount == 1)

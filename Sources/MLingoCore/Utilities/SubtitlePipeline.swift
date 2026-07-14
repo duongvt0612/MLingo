@@ -192,7 +192,6 @@ public final class SubtitlePipeline {
     }
 
     public func selectOverlayDisplay(_ selection: OverlayDisplaySelection) {
-        guard activeMode == .translation else { return }
         overlayEngine.selectDisplay(selection)
     }
 
