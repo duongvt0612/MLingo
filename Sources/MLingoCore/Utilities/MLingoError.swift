@@ -3,10 +3,13 @@ import Foundation
 public enum MLingoError: LocalizedError, Equatable, Sendable {
     case missingAPIKey
     case permissionDenied(String)
+    case systemAudioPermissionDenied
+    case coreAudioHALFailure(operation: String, status: Int32)
     case noAudioSource
     case captureFailed(String)
     case whisperModelUnavailable(String)
-    case whisperIntegrationPending(String)
+    case whisperModelLoadFailed(String)
+    case whisperInferenceFailed(String)
     case translationFailed(String)
     case invalidResponse
 
@@ -16,13 +19,19 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
             "Add an OpenAI Platform API key in Settings before starting translation."
         case .permissionDenied(let message):
             message
+        case .systemAudioPermissionDenied:
+            "Cấp quyền System Audio Recording cho MLingo trong System Settings > Privacy & Security > Screen & System Audio Recording, rồi thử lại."
+        case .coreAudioHALFailure(let operation, let status):
+            "Core Audio failed during \(operation) (OSStatus \(status))."
         case .noAudioSource:
             "No capturable display or audio source is available."
         case .captureFailed(let message):
             message
         case .whisperModelUnavailable(let message):
             message
-        case .whisperIntegrationPending(let message):
+        case .whisperModelLoadFailed(let message):
+            message
+        case .whisperInferenceFailed(let message):
             message
         case .translationFailed(let message):
             message

@@ -3,12 +3,21 @@ import Foundation
 public struct AudioCaptureDiagnosticsAccumulator: Sendable {
     public private(set) var diagnostics: AudioCaptureDiagnostics
 
-    public init(diagnostics: AudioCaptureDiagnostics = AudioCaptureDiagnostics()) {
+    public init(
+        diagnostics: AudioCaptureDiagnostics = AudioCaptureDiagnostics(),
+        backend: AudioCaptureBackend? = nil
+    ) {
+        var diagnostics = diagnostics
+        diagnostics.backend = backend ?? diagnostics.backend
         self.diagnostics = diagnostics
     }
 
     public mutating func reset(state: AudioCaptureState) -> AudioCaptureDiagnostics {
-        diagnostics = AudioCaptureDiagnostics(state: state)
+        diagnostics = AudioCaptureDiagnostics(
+            backend: diagnostics.backend,
+            vadThreshold: diagnostics.vadThreshold,
+            state: state
+        )
         return diagnostics
     }
 

@@ -1,38 +1,145 @@
 import Foundation
+import HuggingFace
+import MLX
+import MLXAudioCore
+import MLXAudioSTT
 
-public final class MLXWhisperEngine: WhisperEngineProtocol, @unchecked Sendable {
-    private var loadedModelName: String?
+protocol WhisperInferenceBackend: Sendable {
+    func loadModel(named modelName: String) async throws
+    func transcribe(samples: [Float], language: String) async throws -> String
+}
 
-    public init() {}
+actor MLXAudioWhisperBackend: WhisperInferenceBackend {
+    private static let whisperSampleRate = 16_000
+    private let isMetalLibraryAvailable: @Sendable () -> Bool
+    private let cache: HubCache
+    private var model: WhisperModel?
 
-    public func loadModel(named modelName: String) async throws {
-        guard !modelName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw MLingoError.whisperModelUnavailable("Choose a Whisper model in Settings.")
+    init(
+        cacheDirectory: URL? = nil,
+        isMetalLibraryAvailable: @escaping @Sendable () -> Bool = {
+            MLXMetalLibraryAvailability.isAvailable()
         }
-
-        loadedModelName = modelName
+    ) {
+        cache = cacheDirectory.map(HubCache.init(cacheDirectory:)) ?? .default
+        self.isMetalLibraryAvailable = isMetalLibraryAvailable
     }
 
-    public func transcribe(_ chunk: AudioChunk) async throws -> Transcript? {
-        guard loadedModelName != nil else {
-            throw MLingoError.whisperModelUnavailable("Load a Whisper model before starting capture.")
+    func loadModel(named modelName: String) async throws {
+        guard isMetalLibraryAvailable() else {
+            throw MLingoError.whisperModelLoadFailed(
+                "MLX Metal shaders are missing from this build. `swift run` does not package mlx-swift Metal resources. Install the Metal Toolchain and run the MLingo scheme in Xcode."
+            )
         }
 
-        let rms = rootMeanSquare(chunk.samples)
-        guard rms > 0.015 else {
-            return nil
-        }
-
-        throw MLingoError.whisperIntegrationPending(
-            "MLX Whisper model inference is not wired yet. Audio capture is producing speech-like chunks."
+        model = try await WhisperModel.fromPretrained(
+            Self.resolvedModelName(for: modelName),
+            cache: cache
         )
     }
 
-    private func rootMeanSquare(_ samples: [Float]) -> Float {
-        guard !samples.isEmpty else { return 0 }
-        let sum = samples.reduce(Float.zero) { partial, sample in
-            partial + sample * sample
+    static func resolvedModelName(for modelName: String) -> String {
+        switch modelName {
+        case "mlx-community/whisper-base-mlx":
+            "mlx-community/whisper-base-asr-fp16"
+        case "mlx-community/whisper-small-mlx":
+            "mlx-community/whisper-small-asr-fp16"
+        default:
+            modelName
         }
-        return sqrt(sum / Float(samples.count))
+    }
+
+    static func maximumTokenCount(sampleCount: Int) -> Int {
+        let duration = Double(max(sampleCount, 0)) / Double(whisperSampleRate)
+        return min(128, max(48, Int(ceil(duration * 16))))
+    }
+
+    func transcribe(samples: [Float], language: String) async throws -> String {
+        guard let model else {
+            throw MLingoError.whisperModelUnavailable(
+                "Load a Whisper model before starting transcription."
+            )
+        }
+
+        let generationParameters = STTGenerateParameters(
+            maxTokens: Self.maximumTokenCount(sampleCount: samples.count),
+            temperature: 0,
+            topP: 1,
+            topK: 0,
+            verbose: false,
+            language: language,
+            chunkDuration: 30,
+            minChunkDuration: 0.1,
+            repetitionPenalty: 1,
+            repetitionContextSize: 32
+        )
+        let output = model.generate(
+            audio: MLXArray(samples),
+            generationParameters: generationParameters
+        )
+        return output.text
+    }
+}
+
+public actor MLXWhisperEngine: WhisperEngineProtocol {
+    private let backend: any WhisperInferenceBackend
+    private var loadedModelName: String?
+
+    public init() {
+        backend = MLXAudioWhisperBackend()
+    }
+
+    init(backend: any WhisperInferenceBackend) {
+        self.backend = backend
+    }
+
+    public func loadModel(named modelName: String) async throws {
+        let normalizedName = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedName.isEmpty else {
+            throw MLingoError.whisperModelLoadFailed(
+                "Choose a valid Hugging Face Whisper model in Settings."
+            )
+        }
+
+        guard loadedModelName != normalizedName else { return }
+
+        do {
+            try await backend.loadModel(named: normalizedName)
+            loadedModelName = normalizedName
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw MLingoError.whisperModelLoadFailed(
+                "Could not load Whisper model \(normalizedName). Check the model ID and network connection. \(String(describing: error))"
+            )
+        }
+    }
+
+    public func transcribe(_ chunk: AudioChunk, language: String) async throws -> Transcript? {
+        guard loadedModelName != nil else {
+            throw MLingoError.whisperModelUnavailable(
+                "Load a Whisper model before starting transcription."
+            )
+        }
+
+        guard !chunk.samples.isEmpty else { return nil }
+
+        do {
+            let text = try await backend.transcribe(
+                samples: chunk.samples,
+                language: language
+            )
+            let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedText.isEmpty else { return nil }
+            return Transcript(text: trimmedText, timestamp: chunk.timestamp)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as MLingoError {
+            throw error
+        } catch {
+            throw MLingoError.whisperInferenceFailed(
+                "Whisper could not transcribe the current audio window. \(error.localizedDescription)"
+            )
+        }
     }
 }

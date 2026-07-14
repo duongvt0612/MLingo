@@ -1,5 +1,30 @@
 import Foundation
 
+public enum AudioCaptureBackend: String, Codable, CaseIterable, Equatable, Identifiable, Sendable {
+    case coreAudioTap
+    case screenCaptureKit
+
+    public var id: Self { self }
+
+    public var displayName: String {
+        switch self {
+        case .coreAudioTap:
+            "System Audio"
+        case .screenCaptureKit:
+            "Screen Recording"
+        }
+    }
+
+    public var permissionDisplayName: String {
+        switch self {
+        case .coreAudioTap:
+            "System Audio Recording"
+        case .screenCaptureKit:
+            "Screen Recording"
+        }
+    }
+}
+
 public enum AudioCaptureState: Equatable, Sendable {
     case idle
     case requestingPermission
@@ -9,6 +34,7 @@ public enum AudioCaptureState: Equatable, Sendable {
 }
 
 public struct AudioCaptureDiagnostics: Equatable, Sendable {
+    public var backend: AudioCaptureBackend?
     public var rms: Float
     public var peak: Float
     public var sampleRate: Double
@@ -23,6 +49,7 @@ public struct AudioCaptureDiagnostics: Equatable, Sendable {
     public var state: AudioCaptureState
 
     public init(
+        backend: AudioCaptureBackend? = nil,
         rms: Float = 0,
         peak: Float = 0,
         sampleRate: Double = 0,
@@ -36,6 +63,7 @@ public struct AudioCaptureDiagnostics: Equatable, Sendable {
         lastUpdated: Date? = nil,
         state: AudioCaptureState = .idle
     ) {
+        self.backend = backend
         self.rms = rms
         self.peak = peak
         self.sampleRate = sampleRate
@@ -58,4 +86,45 @@ public protocol AudioEngineProtocol: AnyObject, Sendable {
 
     func start() async throws
     func stop() async
+}
+
+public protocol AudioEngineFactoryProtocol: Sendable {
+    func makeAudioEngine(preferredBackend: AudioCaptureBackend) -> any AudioEngineProtocol
+}
+
+public struct SystemAudioEngineFactory: AudioEngineFactoryProtocol {
+    private let isCoreAudioTapAvailable: Bool
+    private let makeCoreAudioTapEngine: @Sendable () -> any AudioEngineProtocol
+    private let makeScreenCaptureKitEngine: @Sendable () -> any AudioEngineProtocol
+
+    public init() {
+        if #available(macOS 14.2, *) {
+            isCoreAudioTapAvailable = true
+            makeCoreAudioTapEngine = { CoreAudioTapEngine() }
+        } else {
+            isCoreAudioTapAvailable = false
+            makeCoreAudioTapEngine = { ScreenCaptureAudioEngine() }
+        }
+        makeScreenCaptureKitEngine = { ScreenCaptureAudioEngine() }
+    }
+
+    init(
+        isCoreAudioTapAvailable: Bool,
+        makeCoreAudioTapEngine: @escaping @Sendable () -> any AudioEngineProtocol,
+        makeScreenCaptureKitEngine: @escaping @Sendable () -> any AudioEngineProtocol
+    ) {
+        self.isCoreAudioTapAvailable = isCoreAudioTapAvailable
+        self.makeCoreAudioTapEngine = makeCoreAudioTapEngine
+        self.makeScreenCaptureKitEngine = makeScreenCaptureKitEngine
+    }
+
+    public func makeAudioEngine(
+        preferredBackend: AudioCaptureBackend
+    ) -> any AudioEngineProtocol {
+        if preferredBackend == .coreAudioTap, isCoreAudioTapAvailable {
+            makeCoreAudioTapEngine()
+        } else {
+            makeScreenCaptureKitEngine()
+        }
+    }
 }
