@@ -1,3 +1,4 @@
+import AudioToolbox
 import Foundation
 import Testing
 @testable import MLingoCore
@@ -27,7 +28,7 @@ func audioLevelAnalyzerDropsSilenceBelowThreshold() {
 
 @Test
 func diagnosticsAccumulatorTracksChunkCounters() {
-    var accumulator = AudioCaptureDiagnosticsAccumulator()
+    var accumulator = AudioCaptureDiagnosticsAccumulator(backend: .coreAudioTap)
     let chunk = AudioChunk(
         samples: [0.02, -0.02],
         sampleRate: 16_000,
@@ -51,6 +52,75 @@ func diagnosticsAccumulatorTracksChunkCounters() {
     #expect(diagnostics.emptyChunkCount == 1)
     #expect(diagnostics.sampleRate == 16_000)
     #expect(diagnostics.channelCount == 1)
+    #expect(diagnostics.backend == .coreAudioTap)
+
+    let reset = accumulator.reset(state: .requestingPermission)
+    #expect(reset.backend == .coreAudioTap)
+}
+
+@Test
+func pcmNormalizerDownmixesStereoFloat32() {
+    var interleavedSamples: [Float] = [1, -1, 0.5, 0.5, -0.25, 0.75]
+    let normalized = interleavedSamples.withUnsafeMutableBytes { bytes -> [Float]? in
+        var bufferList = AudioBufferList(
+            mNumberBuffers: 1,
+            mBuffers: AudioBuffer(
+                mNumberChannels: 2,
+                mDataByteSize: UInt32(bytes.count),
+                mData: bytes.baseAddress
+            )
+        )
+        let format = AudioStreamBasicDescription(
+            mSampleRate: 16_000,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: 8,
+            mFramesPerPacket: 1,
+            mBytesPerFrame: 8,
+            mChannelsPerFrame: 2,
+            mBitsPerChannel: 32,
+            mReserved: 0
+        )
+        return withUnsafePointer(to: &bufferList) {
+            AudioPCMNormalizer.normalize(bufferList: $0, streamDescription: format)
+        }
+    }
+
+    #expect(normalized == [0, 0.5, 0.25])
+}
+
+@Test
+func pcmNormalizerResamplesToSixteenKilohertz() {
+    var sourceSamples = (0..<480).map { index in
+        Float(sin(Double(index) * 2 * .pi / 48))
+    }
+    let normalized = sourceSamples.withUnsafeMutableBytes { bytes -> [Float]? in
+        var bufferList = AudioBufferList(
+            mNumberBuffers: 1,
+            mBuffers: AudioBuffer(
+                mNumberChannels: 1,
+                mDataByteSize: UInt32(bytes.count),
+                mData: bytes.baseAddress
+            )
+        )
+        let format = AudioStreamBasicDescription(
+            mSampleRate: 48_000,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: 4,
+            mFramesPerPacket: 1,
+            mBytesPerFrame: 4,
+            mChannelsPerFrame: 1,
+            mBitsPerChannel: 32,
+            mReserved: 0
+        )
+        return withUnsafePointer(to: &bufferList) {
+            AudioPCMNormalizer.normalize(bufferList: $0, streamDescription: format)
+        }
+    }
+
+    #expect(normalized != nil)
+    #expect((150...170).contains(normalized?.count ?? 0))
 }
 
 @Test
