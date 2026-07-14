@@ -294,6 +294,35 @@ func floatingOverlayDoesNotLetDebouncedMoveOverwriteDisplaySelection() async thr
     #expect(store.preferences.placementsByDisplayID[testMainDisplay.id] != nil)
 }
 
+@Test @MainActor
+func floatingOverlayResizesUpwardAndClampsToVisibleFrame() {
+    let panel = TestOverlayPanel(frame: .zero)
+    panel.fittingSize = CGSize(width: 1_400, height: 700)
+    let controller = FloatingSubtitleWindowController(
+        preferencesStore: TestOverlayPreferencesStore(),
+        displayCatalog: TestOverlayDisplayCatalog(displays: [testMainDisplay]),
+        placementSaveDelay: .zero,
+        observesScreenChanges: false,
+        panelFactory: { frame in
+            panel.frame = frame
+            return panel
+        }
+    )
+
+    controller.show(settings: AppSettings())
+    #expect(panel.frame.width == 980)
+    #expect(panel.frame.height == testMainDisplay.visibleFrame.height * 0.4)
+    #expect(panel.frame.minY == testMainDisplay.visibleFrame.minY + 56)
+    #expect(testMainDisplay.visibleFrame.contains(panel.frame))
+
+    panel.fittingSize = CGSize(width: 600, height: 120)
+    controller.update(with: testSubtitle(translated: "Short"), settings: AppSettings())
+
+    #expect(panel.frame.size == panel.fittingSize)
+    #expect(panel.frame.minY == testMainDisplay.visibleFrame.minY + 56)
+    #expect(testMainDisplay.visibleFrame.contains(panel.frame))
+}
+
 private let testMainDisplay = OverlayDisplayDescriptor(
     id: "main",
     name: "Built-in Display",
