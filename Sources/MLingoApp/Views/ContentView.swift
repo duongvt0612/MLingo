@@ -39,6 +39,8 @@ struct ContentView: View {
             }
             .accessibilityLabel("Open settings")
 
+            overlayMenu
+
             Button {
                 viewModel.isTestingSound ? viewModel.stopSoundTest() : viewModel.startSoundTest()
             } label: {
@@ -64,6 +66,76 @@ struct ContentView: View {
         .padding(.leading, 84)
         .padding(.trailing, 24)
         .padding(.bottom, 16)
+    }
+
+    private var overlayMenu: some View {
+        let state = viewModel.overlayPresentationState
+
+        return Menu {
+            Button {
+                viewModel.setOverlayVisible(!state.isVisible)
+            } label: {
+                Label(
+                    state.isVisible ? "Hide Overlay" : "Show Overlay",
+                    systemImage: state.isVisible ? "eye.slash" : "eye"
+                )
+            }
+
+            Button {
+                viewModel.beginOverlayRepositioning()
+            } label: {
+                Label("Reposition Overlay", systemImage: "arrow.up.and.down.and.arrow.left.and.right")
+            }
+            .disabled(state.isEditing)
+
+            Button {
+                viewModel.resetOverlayPosition()
+            } label: {
+                Label("Reset Position", systemImage: "arrow.counterclockwise")
+            }
+
+            Divider()
+
+            Menu("Move to Display") {
+                overlayDisplayButton(
+                    title: "Automatic",
+                    selection: .automatic,
+                    currentSelection: state.selectedDisplay
+                )
+
+                ForEach(state.availableDisplays) { display in
+                    overlayDisplayButton(
+                        title: display.name,
+                        selection: .display(id: display.id),
+                        currentSelection: state.selectedDisplay
+                    )
+                }
+            }
+        } label: {
+            Label("Overlay", systemImage: "captions.bubble")
+        }
+        .disabled(!viewModel.isRunning)
+        .accessibilityLabel("Overlay controls")
+        .accessibilityHint("Show, reposition, reset, or move the subtitle overlay")
+    }
+
+    private func overlayDisplayButton(
+        title: String,
+        selection: OverlayDisplaySelection,
+        currentSelection: OverlayDisplaySelection
+    ) -> some View {
+        Button {
+            viewModel.selectOverlayDisplay(selection)
+        } label: {
+            if selection == currentSelection {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
+        }
+        .accessibilityLabel(
+            selection == currentSelection ? "\(title), selected" : title
+        )
     }
 
     private var mainContent: some View {

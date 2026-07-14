@@ -113,18 +113,67 @@ func startPipelineEndsActiveModeWhenAudioStartupFails() async throws {
     #expect(viewModel.status != "Testing transcription")
 }
 
+@Test @MainActor
+func savingSettingsPersistsOverlayDisplaySelectionWhileIdle() async {
+    let overlay = AppTestOverlayEngine()
+    let viewModel = makeViewModel(
+        overlayEngine: overlay,
+        translationTestEngineFactory: { _ in AppTestTranslationEngine() }
+    )
+
+    let saved = await viewModel.save(
+        AppSettings(),
+        apiKey: "",
+        overlayDisplaySelection: .display(id: "external")
+    )
+
+    #expect(saved)
+    #expect(overlay.selectedDisplays == [.display(id: "external")])
+}
+
+@Test @MainActor
+func viewModelExposesOverlayStateAndRoutesLiveOverlayActions() async throws {
+    let overlay = AppTestOverlayEngine()
+    let viewModel = makeViewModel(
+        overlayEngine: overlay,
+        translationTestEngineFactory: { _ in AppTestTranslationEngine() }
+    )
+
+    #expect(viewModel.overlayPresentationState === overlay.presentationState)
+    viewModel.beginOverlayRepositioning()
+    #expect(overlay.beginRepositioningCount == 0)
+
+    viewModel.start()
+    try await appEventually { viewModel.status == "Listening" }
+
+    viewModel.setOverlayVisible(false)
+    viewModel.beginOverlayRepositioning()
+    viewModel.endOverlayRepositioning()
+    viewModel.resetOverlayPosition()
+    viewModel.selectOverlayDisplay(.automatic)
+
+    #expect(overlay.setVisibleValues == [false])
+    #expect(overlay.beginRepositioningCount == 1)
+    #expect(overlay.endRepositioningCount == 1)
+    #expect(overlay.resetPositionCount == 1)
+    #expect(overlay.selectedDisplays == [.automatic])
+
+    viewModel.stop()
+}
+
 @MainActor
 private func makeViewModel(
     settingsStore: AppTestSettingsStore = AppTestSettingsStore(),
     keyStore: AppTestAPIKeyStore = AppTestAPIKeyStore(),
     audioFactory: AppTestAudioFactory = AppTestAudioFactory(),
+    overlayEngine: AppTestOverlayEngine = AppTestOverlayEngine(),
     translationTestEngineFactory: @escaping MLingoViewModel.TranslationTestEngineFactory
 ) -> MLingoViewModel {
     let pipeline = SubtitlePipeline(
         audioEngineFactory: audioFactory,
         whisperEngine: AppTestWhisperEngine(),
         translationEngine: AppTestTranslationEngine(),
-        overlayEngine: AppTestOverlayEngine(),
+        overlayEngine: overlayEngine,
         settingsStore: settingsStore
     )
     return MLingoViewModel(
@@ -194,9 +243,21 @@ private actor AppTestWhisperEngine: WhisperEngineProtocol {
 
 @MainActor
 private final class AppTestOverlayEngine: OverlayEngineProtocol {
-    func show() {}
+    let presentationState = OverlayPresentationState()
+    private(set) var setVisibleValues: [Bool] = []
+    private(set) var beginRepositioningCount = 0
+    private(set) var endRepositioningCount = 0
+    private(set) var resetPositionCount = 0
+    private(set) var selectedDisplays: [OverlayDisplaySelection] = []
+
+    func show(settings: AppSettings) {}
     func update(with subtitle: SubtitleItem, settings: AppSettings) {}
     func hide() {}
+    func setVisible(_ isVisible: Bool) { setVisibleValues.append(isVisible) }
+    func beginRepositioning() { beginRepositioningCount += 1 }
+    func endRepositioning() { endRepositioningCount += 1 }
+    func resetPosition() { resetPositionCount += 1 }
+    func selectDisplay(_ selection: OverlayDisplaySelection) { selectedDisplays.append(selection) }
 }
 
 private final class AppTestAudioFactory: AudioEngineFactoryProtocol, @unchecked Sendable {

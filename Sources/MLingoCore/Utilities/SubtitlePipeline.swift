@@ -30,6 +30,10 @@ public final class SubtitlePipeline {
     private var activeMode: SubtitlePipelineMode?
     private var overlayVisible = false
 
+    public var overlayPresentationState: OverlayPresentationState {
+        overlayEngine.presentationState
+    }
+
     public init(
         audioEngineFactory: any AudioEngineFactoryProtocol,
         whisperEngine: WhisperEngineProtocol,
@@ -100,7 +104,7 @@ public final class SubtitlePipeline {
             }
 
             if mode == .translation {
-                overlayEngine.show()
+                overlayEngine.show(settings: settings)
                 overlayVisible = true
             }
             MLingoLogger.pipeline.info("Subtitle pipeline started")
@@ -165,6 +169,30 @@ public final class SubtitlePipeline {
             overlayVisible = false
         }
         MLingoLogger.pipeline.info("Subtitle pipeline stopped")
+    }
+
+    public func setOverlayVisible(_ isVisible: Bool) {
+        guard activeMode == .translation else { return }
+        overlayEngine.setVisible(isVisible)
+    }
+
+    public func beginOverlayRepositioning() {
+        guard activeMode == .translation else { return }
+        overlayEngine.beginRepositioning()
+    }
+
+    public func endOverlayRepositioning() {
+        guard activeMode == .translation else { return }
+        overlayEngine.endRepositioning()
+    }
+
+    public func resetOverlayPosition() {
+        guard activeMode == .translation else { return }
+        overlayEngine.resetPosition()
+    }
+
+    public func selectOverlayDisplay(_ selection: OverlayDisplaySelection) {
+        overlayEngine.selectDisplay(selection)
     }
 
     private func receive(

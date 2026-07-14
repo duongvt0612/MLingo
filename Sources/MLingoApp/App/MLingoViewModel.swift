@@ -46,6 +46,9 @@ final class MLingoViewModel {
     var isTestingTranscription: Bool { activeMode == .transcriptionTest }
     var isActive: Bool { activeMode != .idle }
     var isTranslationTestRunning: Bool { translationTestState == .running }
+    var overlayPresentationState: OverlayPresentationState {
+        pipeline.overlayPresentationState
+    }
 
     private let settingsStore: SettingsStoreProtocol
     private let apiKeyStore: APIKeyStoreProtocol
@@ -118,7 +121,11 @@ final class MLingoViewModel {
     }
 
     @discardableResult
-    func save(_ candidateSettings: AppSettings, apiKey candidateAPIKey: String? = nil) async -> Bool {
+    func save(
+        _ candidateSettings: AppSettings,
+        apiKey candidateAPIKey: String? = nil,
+        overlayDisplaySelection: OverlayDisplaySelection? = nil
+    ) async -> Bool {
         do {
             let trimmedAPIKey = (candidateAPIKey ?? apiKey)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -128,6 +135,9 @@ final class MLingoViewModel {
                 try apiKeyStore.saveAPIKey(trimmedAPIKey)
             }
             try await settingsStore.save(candidateSettings)
+            if let overlayDisplaySelection {
+                pipeline.selectOverlayDisplay(overlayDisplaySelection)
+            }
             apiKey = trimmedAPIKey
             settings = candidateSettings
             status = "Settings saved"
@@ -195,6 +205,30 @@ final class MLingoViewModel {
     func stop() {
         guard activeMode == .translation else { return }
         stopActiveMode(statusAfterStop: "Stopped")
+    }
+
+    func setOverlayVisible(_ isVisible: Bool) {
+        guard isRunning else { return }
+        pipeline.setOverlayVisible(isVisible)
+    }
+
+    func beginOverlayRepositioning() {
+        guard isRunning else { return }
+        pipeline.beginOverlayRepositioning()
+    }
+
+    func endOverlayRepositioning() {
+        guard isRunning else { return }
+        pipeline.endOverlayRepositioning()
+    }
+
+    func resetOverlayPosition() {
+        guard isRunning else { return }
+        pipeline.resetOverlayPosition()
+    }
+
+    func selectOverlayDisplay(_ selection: OverlayDisplaySelection) {
+        pipeline.selectOverlayDisplay(selection)
     }
 
     func startTranscriptionTest() {

@@ -118,6 +118,46 @@ func translationModePreservesTranslationAndOverlayFlow() async throws {
 }
 
 @Test @MainActor
+func pipelineProxiesOverlayCommandsOnlyDuringTranslationSession() async {
+    let audio = PipelineAudioEngine()
+    let overlay = PipelineOverlayEngine()
+    let settings = AppSettings(
+        subtitleFontSize: 32,
+        subtitleBackgroundOpacity: 0.72
+    )
+    let pipeline = SubtitlePipeline(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: PipelineWhisperEngine(text: "unused"),
+        translationEngine: PipelineTranslationEngine(),
+        overlayEngine: overlay,
+        settingsStore: PipelineSettingsStore(settings: settings)
+    )
+
+    pipeline.setOverlayVisible(false)
+    pipeline.beginOverlayRepositioning()
+    pipeline.endOverlayRepositioning()
+    pipeline.resetOverlayPosition()
+    pipeline.selectOverlayDisplay(.display(id: "external"))
+
+    #expect(overlay.commandCount == 1)
+
+    let started = await pipeline.start(mode: .translation, onError: { _ in })
+    #expect(started)
+    #expect(overlay.lastShownSettings == settings)
+
+    pipeline.setOverlayVisible(false)
+    pipeline.beginOverlayRepositioning()
+    pipeline.endOverlayRepositioning()
+    pipeline.resetOverlayPosition()
+    pipeline.selectOverlayDisplay(.display(id: "external"))
+
+    #expect(overlay.commandCount == 6)
+
+    await pipeline.stop()
+    #expect(overlay.hideCount == 1)
+}
+
+@Test @MainActor
 func translationModeReceivesOnlyTextAfterFuzzyOverlap() async throws {
     let audio = PipelineAudioEngine()
     let whisper = PipelineScriptedWhisperEngine(texts: [
@@ -583,19 +623,53 @@ private actor FailingPipelineTranslationEngine: TranslationEngineProtocol {
 
 @MainActor
 private final class PipelineOverlayEngine: OverlayEngineProtocol {
+    let presentationState = OverlayPresentationState()
     private(set) var showCount = 0
     private(set) var updateCount = 0
     private(set) var hideCount = 0
+    private(set) var commandCount = 0
     private(set) var lastSubtitle: SubtitleItem?
+    private(set) var lastShownSettings: AppSettings?
 
-    func show() { showCount += 1 }
+    func show(settings: AppSettings) {
+        showCount += 1
+        lastShownSettings = settings
+        presentationState.isVisible = true
+    }
 
     func update(with subtitle: SubtitleItem, settings: AppSettings) {
         updateCount += 1
         lastSubtitle = subtitle
     }
 
-    func hide() { hideCount += 1 }
+    func hide() {
+        hideCount += 1
+        presentationState.isVisible = false
+        presentationState.isEditing = false
+    }
+
+    func setVisible(_ isVisible: Bool) {
+        commandCount += 1
+        presentationState.isVisible = isVisible
+    }
+
+    func beginRepositioning() {
+        commandCount += 1
+        presentationState.isVisible = true
+        presentationState.isEditing = true
+    }
+
+    func endRepositioning() {
+        commandCount += 1
+        presentationState.isEditing = false
+    }
+
+    func resetPosition() { commandCount += 1 }
+
+    func selectDisplay(_ selection: OverlayDisplaySelection) {
+        commandCount += 1
+        presentationState.selectedDisplay = selection
+    }
 }
 
 private actor PipelineSettingsStore: SettingsStoreProtocol {
