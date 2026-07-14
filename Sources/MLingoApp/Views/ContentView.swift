@@ -184,6 +184,10 @@ struct ContentView: View {
                 alignment: .leading,
                 spacing: 12
             ) {
+                diagnosticMetric(
+                    "Backend",
+                    viewModel.audioDiagnostics.backend?.displayName ?? "Not active"
+                )
                 diagnosticMetric("Sample rate", "\(Int(viewModel.audioDiagnostics.sampleRate)) Hz")
                 diagnosticMetric("Channels", "\(viewModel.audioDiagnostics.channelCount)")
                 diagnosticMetric("Duration", "\(Int(viewModel.audioDiagnostics.lastChunkDuration * 1000)) ms")
@@ -359,13 +363,17 @@ struct ContentView: View {
     }
 
     private var privacyDescription: String {
-        switch viewModel.activeMode {
+        let capturePermission = viewModel.audioDiagnostics.backend.map {
+            "\($0.displayName) uses \($0.permissionDisplayName) permission. "
+        } ?? ""
+
+        return switch viewModel.activeMode {
         case .soundTest:
-            "Testing audio capture only. Whisper and OpenAI are not used in this mode."
+            "\(capturePermission)Testing audio capture only. Whisper and OpenAI are not used in this mode."
         case .transcriptionTest:
-            "Audio and transcription stay on this Mac. OpenAI and the subtitle overlay are not used."
+            "\(capturePermission)Audio and transcription stay on this Mac. OpenAI and the subtitle overlay are not used."
         default:
-            "Audio stays local. Only recognized text is sent to OpenAI for translation."
+            "\(capturePermission)Audio stays local. Only recognized text is sent to OpenAI for translation."
         }
     }
 

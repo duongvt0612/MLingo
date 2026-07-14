@@ -20,10 +20,12 @@ Thay `MLXWhisperEngine` placeholder bằng inference native Swift trên Apple Si
 - [x] ViewModel dùng một active mode duy nhất cho idle, sound test, transcription test và translation.
 - [x] Status panel hiển thị model state, model ID, transcript cuối, window duration, latency, processed và duplicate count.
 - [x] Fixture `jfk.flac` có attribution và test MLX thật dạng opt-in.
+- [x] Mỗi capture session tạo engine và `AsyncStream` mới; Stop → Start không tái sử dụng stream đã terminated.
+- [x] macOS 14.2+ dùng Core Audio Process Tap; macOS 14.0–14.1 fallback ScreenCaptureKit audio-only.
 
 ## Quyền riêng tư và tải model
 
-Audio samples chỉ đi từ ScreenCaptureKit đến MLX Whisper trong process của ứng dụng. MLingo không upload audio. Lần đầu load model/tokenizer, thư viện có thể tải artifact từ Hugging Face; các lần sau dùng cache cục bộ và cùng model ID được reuse trong memory.
+Audio samples chỉ đi từ Core Audio Process Tap (macOS 14.2+) hoặc ScreenCaptureKit audio-only (macOS 14.0–14.1) đến MLX Whisper trong process của ứng dụng. MLingo không upload audio. Trên macOS 14.2+, ứng dụng chỉ yêu cầu System Audio Recording và không fallback sang Screen Recording nếu người dùng từ chối. Lần đầu load model/tokenizer, thư viện có thể tải artifact từ Hugging Face; các lần sau dùng cache cục bộ và cùng model ID được reuse trong memory.
 
 Hai ID do MLingo quản lý (`whisper-base-mlx` và `whisper-small-mlx`) hiện trỏ tới repository legacy chỉ có `weights.npz`, trong khi loader 0.1.3 nhận `safetensors`. Backend resolve chúng sang mirror F16 tương ứng (`*-asr-fp16`, khoảng 144 MB cho base) lúc load. Giá trị settings và custom model ID không bị rewrite.
 
@@ -76,6 +78,7 @@ ask not what your country can do for you
 - [ ] Test Transcription chạy khi không có OpenAI API key và không mở overlay.
 - [ ] YouTube/VLC tạo transcript đúng thứ tự, không spam duplicate.
 - [ ] Stop/start nhiều lần không crash và không nhận callback session cũ.
+- [ ] Stop/start ít nhất 5 lần vẫn nhận meter trong 1 giây; status panel hiển thị đúng Core Audio tap hoặc ScreenCaptureKit.
 - [ ] Lỗi mạng/model hiển thị rõ và có thể thử lại.
 - [ ] Sau warm-up trên M4 Pro, benchmark ít nhất 10 window: median ≤ 1.200 ms, p95 ≤ 2.000 ms; không tính model load.
 
