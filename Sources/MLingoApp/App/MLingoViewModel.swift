@@ -5,6 +5,24 @@ import Observation
 @MainActor
 @Observable
 final class MLingoViewModel {
+    typealias TranslationTestEngineFactory = (String) -> any TranslationEngineProtocol
+
+    struct TranslationTestResult: Equatable {
+        let original: String
+        let translated: String
+        let model: String
+        let latency: TimeInterval
+    }
+
+    enum TranslationTestState: Equatable {
+        case idle
+        case running
+        case success(TranslationTestResult)
+        case failure(String)
+    }
+
+    static let translationTestFixture = "Let's deploy this service with Docker and PostgreSQL."
+
     enum ActiveMode: Equatable {
         case idle
         case soundTest
@@ -17,6 +35,8 @@ final class MLingoViewModel {
     private(set) var activeMode: ActiveMode = .idle
     var status = "Ready"
     var lastError: String?
+    var lastWarning: String?
+    private(set) var translationTestState: TranslationTestState = .idle
     private(set) var transcriptionEntries: [TranscriptLogEntry] = []
     var audioDiagnostics = AudioCaptureDiagnostics()
     var whisperDiagnostics = WhisperDiagnostics()
@@ -25,11 +45,13 @@ final class MLingoViewModel {
     var isTestingSound: Bool { activeMode == .soundTest }
     var isTestingTranscription: Bool { activeMode == .transcriptionTest }
     var isActive: Bool { activeMode != .idle }
+    var isTranslationTestRunning: Bool { translationTestState == .running }
 
     private let settingsStore: SettingsStoreProtocol
     private let apiKeyStore: APIKeyStoreProtocol
     private let pipeline: SubtitlePipeline
     private let audioEngineFactory: any AudioEngineFactoryProtocol
+    private let translationTestEngineFactory: TranslationTestEngineFactory
     private var startTask: Task<Void, Never>?
     private var activeSessionID = UUID()
     private var soundTestEngine: (any AudioEngineProtocol)?
@@ -40,13 +62,15 @@ final class MLingoViewModel {
         settingsStore: SettingsStoreProtocol,
         apiKeyStore: APIKeyStoreProtocol,
         pipeline: SubtitlePipeline,
-        audioEngineFactory: any AudioEngineFactoryProtocol
+        audioEngineFactory: any AudioEngineFactoryProtocol,
+        translationTestEngineFactory: @escaping TranslationTestEngineFactory
     ) {
         self.settings = settings
         self.settingsStore = settingsStore
         self.apiKeyStore = apiKeyStore
         self.pipeline = pipeline
         self.audioEngineFactory = audioEngineFactory
+        self.translationTestEngineFactory = translationTestEngineFactory
         whisperDiagnostics.modelID = settings.whisperModel
     }
 
@@ -69,7 +93,12 @@ final class MLingoViewModel {
             settingsStore: settingsStore,
             apiKeyStore: apiKeyStore,
             pipeline: pipeline,
-            audioEngineFactory: audioEngineFactory
+            audioEngineFactory: audioEngineFactory,
+            translationTestEngineFactory: { apiKey in
+                OpenAITranslationEngine(
+                    apiKeyStore: TransientAPIKeyStore(apiKey: apiKey)
+                )
+            }
         )
     }
 
@@ -84,18 +113,21 @@ final class MLingoViewModel {
     }
 
     func save() async {
-        _ = await save(settings)
+        _ = await save(settings, apiKey: apiKey)
     }
 
     @discardableResult
-    func save(_ candidateSettings: AppSettings) async -> Bool {
+    func save(_ candidateSettings: AppSettings, apiKey candidateAPIKey: String? = nil) async -> Bool {
         do {
-            if apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let trimmedAPIKey = (candidateAPIKey ?? apiKey)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedAPIKey.isEmpty {
                 try apiKeyStore.deleteAPIKey()
             } else {
-                try apiKeyStore.saveAPIKey(apiKey.trimmingCharacters(in: .whitespacesAndNewlines))
+                try apiKeyStore.saveAPIKey(trimmedAPIKey)
             }
             try await settingsStore.save(candidateSettings)
+            apiKey = trimmedAPIKey
             settings = candidateSettings
             status = "Settings saved"
             lastError = nil
@@ -104,6 +136,55 @@ final class MLingoViewModel {
             lastError = error.localizedDescription
             return false
         }
+    }
+
+    func testTranslation(apiKey candidateAPIKey: String, settings candidateSettings: AppSettings) async {
+        guard !isActive else {
+            translationTestState = .failure("Stop the active session before testing OpenAI settings.")
+            return
+        }
+
+        let validation = OpenAISettingsValidation(
+            apiKey: candidateAPIKey,
+            settings: candidateSettings
+        )
+        guard validation.isValid else {
+            translationTestState = .failure(validation.firstError ?? "Review the OpenAI settings.")
+            return
+        }
+
+        let trimmedAPIKey = candidateAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = candidateSettings.openAIModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        translationTestState = .running
+        let start = ContinuousClock.now
+
+        do {
+            let engine = translationTestEngineFactory(trimmedAPIKey)
+            let subtitle = try await engine.translate(
+                TranslationRequest(
+                    current: Transcript(text: Self.translationTestFixture, timestamp: 0)
+                ),
+                settings: candidateSettings
+            )
+            try Task.checkCancellation()
+            translationTestState = .success(
+                TranslationTestResult(
+                    original: subtitle.original,
+                    translated: subtitle.translated,
+                    model: model,
+                    latency: start.duration(to: .now).timeInterval
+                )
+            )
+        } catch is CancellationError {
+            translationTestState = .idle
+        } catch {
+            translationTestState = .failure(error.localizedDescription)
+        }
+    }
+
+    func resetTranslationTest() {
+        guard !isTranslationTestRunning else { return }
+        translationTestState = .idle
     }
 
     func start() {
@@ -132,6 +213,7 @@ final class MLingoViewModel {
         activeMode = .soundTest
         status = "Testing system audio"
         lastError = nil
+        lastWarning = nil
         audioDiagnostics = AudioCaptureDiagnostics(state: .requestingPermission)
 
         startTask = Task {
@@ -181,6 +263,7 @@ final class MLingoViewModel {
         activeMode = viewMode
         status = startingStatus
         lastError = nil
+        lastWarning = nil
         transcriptionEntries = []
         whisperDiagnostics = WhisperDiagnostics(
             modelState: .loading,
@@ -201,6 +284,12 @@ final class MLingoViewModel {
                         guard self?.activeSessionID == sessionID else { return }
                         self?.lastError = message
                         self?.status = "Needs attention"
+                    }
+                },
+                onWarning: { [weak self, sessionID] message in
+                    Task { @MainActor in
+                        guard self?.activeSessionID == sessionID else { return }
+                        self?.lastWarning = message
                     }
                 },
                 onAudioDiagnostics: { [weak self, sessionID] diagnostics in
@@ -281,5 +370,58 @@ final class MLingoViewModel {
 
     private func isCurrentSession(_ sessionID: UUID, mode: ActiveMode) -> Bool {
         activeSessionID == sessionID && activeMode == mode && !Task.isCancelled
+    }
+}
+
+struct OpenAISettingsValidation: Equatable {
+    let apiKeyError: String?
+    let modelError: String?
+    let sourceLanguageError: String?
+    let targetLanguageError: String?
+
+    init(apiKey: String, settings: AppSettings) {
+        apiKeyError = apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Enter an OpenAI Platform API key."
+            : nil
+        modelError = settings.openAIModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Enter an OpenAI model."
+            : nil
+        sourceLanguageError = settings.sourceLanguage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Enter a source language."
+            : nil
+        targetLanguageError = settings.targetLanguage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Enter a target language."
+            : nil
+    }
+
+    var isValid: Bool {
+        apiKeyError == nil && hasValidTranslationSettings
+    }
+
+    var hasValidTranslationSettings: Bool {
+        modelError == nil && sourceLanguageError == nil && targetLanguageError == nil
+    }
+
+    var firstError: String? {
+        apiKeyError ?? modelError ?? sourceLanguageError ?? targetLanguageError
+    }
+}
+
+private final class TransientAPIKeyStore: APIKeyStoreProtocol, @unchecked Sendable {
+    private var apiKey: String?
+
+    init(apiKey: String) {
+        self.apiKey = apiKey
+    }
+
+    func loadAPIKey() throws -> String? { apiKey }
+    func saveAPIKey(_ apiKey: String) throws { self.apiKey = apiKey }
+    func deleteAPIKey() throws { apiKey = nil }
+}
+
+private extension Duration {
+    var timeInterval: TimeInterval {
+        let components = self.components
+        return Double(components.seconds) + Double(components.attoseconds) / 1_000_000_000_000_000_000
     }
 }

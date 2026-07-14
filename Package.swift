@@ -60,6 +60,11 @@ let package = Package(
             resources: [
                 .copy("Fixtures")
             ]
+        ),
+        .testTarget(
+            name: "MLingoAppTests",
+            dependencies: ["MLingoApp", "MLingoCore"],
+            path: "Tests/MLingoAppTests"
         )
     ]
 )

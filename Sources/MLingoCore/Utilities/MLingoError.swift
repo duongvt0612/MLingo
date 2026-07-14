@@ -10,6 +10,16 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
     case whisperModelUnavailable(String)
     case whisperModelLoadFailed(String)
     case whisperInferenceFailed(String)
+    case invalidAPIKey
+    case invalidOpenAIModel
+    case quotaExceeded
+    case rateLimited
+    case networkOffline
+    case requestTimedOut
+    case translationServiceUnavailable
+    case translationInputTooLong(maxCharacters: Int)
+    case invalidTranslationConfiguration(String)
+    case translationRequestRejected(String)
     case translationFailed(String)
     case invalidResponse
 
@@ -33,10 +43,46 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
             message
         case .whisperInferenceFailed(let message):
             message
+        case .invalidAPIKey:
+            "The OpenAI API key is invalid. Update it in Settings and start a new translation session."
+        case .invalidOpenAIModel:
+            "The selected OpenAI model is unavailable. Check the model name in Settings."
+        case .quotaExceeded:
+            "The OpenAI account has no available quota. Check billing and usage before trying again."
+        case .rateLimited:
+            "OpenAI is temporarily rate limiting requests. Try again shortly."
+        case .networkOffline:
+            "MLingo is offline. Check the network connection before restarting translation."
+        case .requestTimedOut:
+            "The OpenAI translation request timed out."
+        case .translationServiceUnavailable:
+            "OpenAI translation is temporarily unavailable."
+        case .translationInputTooLong(let maxCharacters):
+            "The transcript is too long to translate safely (maximum \(maxCharacters) characters)."
+        case .invalidTranslationConfiguration(let message):
+            message
+        case .translationRequestRejected(let message):
+            message
         case .translationFailed(let message):
             message
         case .invalidResponse:
             "The translation service returned an unexpected response."
+        }
+    }
+
+    public var pausesTranslationSession: Bool {
+        switch self {
+        case .missingAPIKey,
+             .invalidAPIKey,
+             .invalidOpenAIModel,
+             .quotaExceeded,
+             .networkOffline,
+             .translationInputTooLong,
+             .invalidTranslationConfiguration,
+             .translationRequestRejected:
+            true
+        default:
+            false
         }
     }
 }

@@ -22,7 +22,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public init(
         audioCaptureBackend: AudioCaptureBackend = .coreAudioTap,
         whisperModel: String = "mlx-community/whisper-base-mlx",
-        openAIModel: String = "gpt-4.1-mini",
+        openAIModel: String = "gpt-5.4-mini",
         subtitleFontName: String = ".SFNS-Regular",
         subtitleFontSize: Double = 34,
         subtitleBackgroundOpacity: Double = 0.58,

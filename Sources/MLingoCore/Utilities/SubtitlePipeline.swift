@@ -18,8 +18,14 @@ public final class SubtitlePipeline {
 
     private var task: Task<Void, Never>?
     private var diagnosticsTask: Task<Void, Never>?
+    private var translationTask: Task<Void, Never>?
     private var activeAudioEngine: (any AudioEngineProtocol)?
     private var queue = OrderedSubtitleQueue()
+    private var pendingTranslations: [TranslationRequest] = []
+    private var translationHistory: [Transcript] = []
+    private var lastTranslationDedupeKey: String?
+    private var translationPaused = false
+    private var skippedTranslationCount = 0
     private var sessionID: UUID?
     private var activeMode: SubtitlePipelineMode?
     private var overlayVisible = false
@@ -41,6 +47,7 @@ public final class SubtitlePipeline {
     public func start(
         mode: SubtitlePipelineMode = .translation,
         onError: @escaping @Sendable (String) -> Void,
+        onWarning: @escaping @Sendable (String) -> Void = { _ in },
         onAudioDiagnostics: (@Sendable (AudioCaptureDiagnostics) async -> Void)? = nil,
         onTranscript: @escaping TranscriptHandler = { _ in },
         onWhisperDiagnostics: @escaping WhisperDiagnosticsHandler = { _ in }
@@ -64,7 +71,8 @@ public final class SubtitlePipeline {
                         settings: settings,
                         sessionID: newSessionID,
                         onTranscript: onTranscript,
-                        onError: onError
+                        onError: onError,
+                        onWarning: onWarning
                     )
                 },
                 onDiagnostics: { diagnostics in
@@ -134,11 +142,18 @@ public final class SubtitlePipeline {
         task = nil
         diagnosticsTask?.cancel()
         diagnosticsTask = nil
+        translationTask?.cancel()
+        translationTask = nil
         let audioEngine = activeAudioEngine
         activeAudioEngine = nil
         await transcriptionCoordinator.stop()
         await audioEngine?.stop()
         queue = OrderedSubtitleQueue()
+        pendingTranslations.removeAll(keepingCapacity: false)
+        translationHistory.removeAll(keepingCapacity: false)
+        lastTranslationDedupeKey = nil
+        translationPaused = false
+        skippedTranslationCount = 0
         if overlayVisible {
             overlayEngine.hide()
             overlayVisible = false
@@ -152,27 +167,103 @@ public final class SubtitlePipeline {
         settings: AppSettings,
         sessionID expectedSessionID: UUID,
         onTranscript: TranscriptHandler,
-        onError: @escaping @Sendable (String) -> Void
+        onError: @escaping @Sendable (String) -> Void,
+        onWarning: @escaping @Sendable (String) -> Void
     ) async {
         guard sessionID == expectedSessionID else { return }
         await onTranscript(transcript)
-        guard mode == .translation else { return }
+        guard mode == .translation, !translationPaused else { return }
 
-        do {
-            let subtitle = try await translationEngine.translate(transcript, settings: settings)
-            guard sessionID == expectedSessionID else { return }
-            let ready = queue.insert(subtitle)
-            for item in ready {
-                overlayEngine.update(with: item, settings: settings)
-            }
-        } catch is CancellationError {
-            return
-        } catch {
-            guard sessionID == expectedSessionID else { return }
-            MLingoLogger.pipeline.error(
-                "Subtitle pipeline iteration failed: \(error.localizedDescription, privacy: .public)"
+        enqueueTranslation(
+            transcript,
+            settings: settings,
+            sessionID: expectedSessionID,
+            onError: onError,
+            onWarning: onWarning
+        )
+    }
+
+    private func enqueueTranslation(
+        _ transcript: Transcript,
+        settings: AppSettings,
+        sessionID expectedSessionID: UUID,
+        onError: @escaping @Sendable (String) -> Void,
+        onWarning: @escaping @Sendable (String) -> Void
+    ) {
+        guard sessionID == expectedSessionID, !translationPaused else { return }
+        let dedupeKey = transcript.text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !dedupeKey.isEmpty, dedupeKey != lastTranslationDedupeKey else { return }
+        lastTranslationDedupeKey = dedupeKey
+
+        let request = TranslationRequest(
+            current: transcript,
+            context: Array(translationHistory.suffix(2))
+        )
+        translationHistory.append(transcript)
+        if translationHistory.count > 2 {
+            translationHistory.removeFirst(translationHistory.count - 2)
+        }
+
+        if pendingTranslations.count >= 8 {
+            pendingTranslations.removeFirst()
+            skippedTranslationCount += 1
+            onWarning(
+                "Translation is falling behind. Skipped \(skippedTranslationCount) older subtitles."
             )
-            onError(error.localizedDescription)
+        }
+        pendingTranslations.append(request)
+
+        guard translationTask == nil else { return }
+        translationTask = Task { [weak self] in
+            await self?.drainTranslations(
+                settings: settings,
+                sessionID: expectedSessionID,
+                onError: onError
+            )
+        }
+    }
+
+    private func drainTranslations(
+        settings: AppSettings,
+        sessionID expectedSessionID: UUID,
+        onError: @escaping @Sendable (String) -> Void
+    ) async {
+        defer {
+            if sessionID == expectedSessionID {
+                translationTask = nil
+            }
+        }
+
+        while sessionID == expectedSessionID,
+              !translationPaused,
+              !Task.isCancelled,
+              !pendingTranslations.isEmpty
+        {
+            let request = pendingTranslations.removeFirst()
+
+            do {
+                let subtitle = try await translationEngine.translate(request, settings: settings)
+                guard sessionID == expectedSessionID, !Task.isCancelled else { return }
+                let ready = queue.insert(subtitle)
+                for item in ready {
+                    overlayEngine.update(with: item, settings: settings)
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard sessionID == expectedSessionID, !Task.isCancelled else { return }
+                onError(error.localizedDescription)
+
+                if let mlingoError = error as? MLingoError,
+                   mlingoError.pausesTranslationSession
+                {
+                    translationPaused = true
+                    pendingTranslations.removeAll(keepingCapacity: false)
+                    return
+                }
+            }
         }
     }
 

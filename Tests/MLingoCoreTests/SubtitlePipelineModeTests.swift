@@ -126,6 +126,188 @@ func translationModeReceivesOnlyTextAfterFuzzyOverlap() async throws {
 }
 
 @Test @MainActor
+func translationWorkerDoesNotBlockFollowingTranscripts() async throws {
+    let audio = PipelineAudioEngine()
+    let whisper = PipelineScriptedWhisperEngine(texts: ["First line", "Second line"])
+    let translation = BlockingPipelineTranslationEngine()
+    let overlay = PipelineOverlayEngine()
+    let transcripts = PipelineTranscriptRecorder()
+    let pipeline = SubtitlePipeline(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: whisper,
+        translationEngine: translation,
+        overlayEngine: overlay,
+        settingsStore: PipelineSettingsStore()
+    )
+
+    await pipeline.start(
+        mode: .translation,
+        onError: { _ in },
+        onTranscript: { transcript in await transcripts.append(transcript) }
+    )
+    audio.yield(pipelineAudioChunk(timestamp: 0))
+    try await pipelineEventually { await translation.callCount == 1 }
+
+    audio.yield(pipelineAudioChunk(timestamp: 3))
+    try await pipelineEventually { await transcripts.count == 2 }
+    #expect(await translation.callCount == 1)
+
+    await translation.releaseFirst()
+    try await pipelineEventually { await overlay.updateCount == 2 }
+    #expect(await translation.originalTexts == ["First line", "Second line"])
+    await pipeline.stop()
+}
+
+@Test @MainActor
+func translationWorkerCapturesTwoPreviousTranscriptsAsContext() async throws {
+    let audio = PipelineAudioEngine()
+    let translation = PipelineTranslationEngine()
+    let pipeline = SubtitlePipeline(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: PipelineScriptedWhisperEngine(texts: ["One", "Two", "Three", "Four"]),
+        translationEngine: translation,
+        overlayEngine: PipelineOverlayEngine(),
+        settingsStore: PipelineSettingsStore()
+    )
+
+    await pipeline.start(mode: .translation, onError: { _ in })
+    for index in 0..<4 {
+        audio.yield(pipelineAudioChunk(timestamp: TimeInterval(index * 3)))
+        try await pipelineEventually { await translation.callCount == index + 1 }
+    }
+
+    #expect(await translation.contextTexts == [
+        [],
+        ["One"],
+        ["One", "Two"],
+        ["Two", "Three"],
+    ])
+    await pipeline.stop()
+}
+
+@Test @MainActor
+func translationWorkerSuppressesOnlyAdjacentDuplicateCandidates() async throws {
+    let audio = PipelineAudioEngine()
+    let translation = PipelineTranslationEngine()
+    let pipeline = SubtitlePipeline(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: PipelineScriptedWhisperEngine(texts: [
+            "Repeated subtitle",
+            "Different subtitle",
+            "Repeated subtitle",
+        ]),
+        translationEngine: translation,
+        overlayEngine: PipelineOverlayEngine(),
+        settingsStore: PipelineSettingsStore()
+    )
+
+    await pipeline.start(mode: .translation, onError: { _ in })
+    for index in 0..<3 {
+        audio.yield(pipelineAudioChunk(timestamp: TimeInterval(index * 3)))
+        try await pipelineEventually { await translation.callCount == index + 1 }
+    }
+
+    #expect(await translation.originalTexts == [
+        "Repeated subtitle",
+        "Different subtitle",
+        "Repeated subtitle",
+    ])
+    await pipeline.stop()
+}
+
+@Test @MainActor
+func translationWorkerDropsOldestPendingRequestsWhenQueueIsFull() async throws {
+    let audio = PipelineAudioEngine()
+    let texts = [
+        "Alpha orchard", "Bravo mountain", "Charlie river", "Delta forest",
+        "Echo harbor", "Foxtrot desert", "Golf meadow", "Hotel canyon",
+        "India glacier", "Juliet island", "Kilo valley",
+    ]
+    let translation = BlockingPipelineTranslationEngine()
+    let warnings = PipelineMessageRecorder()
+    let transcripts = PipelineTranscriptRecorder()
+    let pipeline = SubtitlePipeline(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: PipelineScriptedWhisperEngine(texts: texts),
+        translationEngine: translation,
+        overlayEngine: PipelineOverlayEngine(),
+        settingsStore: PipelineSettingsStore()
+    )
+
+    await pipeline.start(
+        mode: .translation,
+        onError: { _ in },
+        onWarning: { message in warnings.append(message) },
+        onTranscript: { transcript in await transcripts.append(transcript) }
+    )
+    for index in texts.indices {
+        audio.yield(pipelineAudioChunk(timestamp: TimeInterval(index * 3)))
+        try await pipelineEventually(timeout: .seconds(3)) {
+            await transcripts.count >= index + 1
+        }
+    }
+
+    #expect(await translation.callCount == 1)
+    #expect(warnings.latest?.contains("Skipped 2") == true)
+    await translation.releaseFirst()
+    try await pipelineEventually { await translation.callCount == 9 }
+    #expect(await translation.originalTexts == ["Alpha orchard"] + Array(texts[3...]))
+    await pipeline.stop()
+}
+
+@Test @MainActor
+func permanentTranslationFailurePausesOnlyTranslationBranch() async throws {
+    let audio = PipelineAudioEngine()
+    let translation = FailingPipelineTranslationEngine(error: MLingoError.invalidAPIKey)
+    let errors = PipelineMessageRecorder()
+    let transcripts = PipelineTranscriptRecorder()
+    let pipeline = SubtitlePipeline(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: PipelineScriptedWhisperEngine(texts: ["First", "Second"]),
+        translationEngine: translation,
+        overlayEngine: PipelineOverlayEngine(),
+        settingsStore: PipelineSettingsStore()
+    )
+
+    await pipeline.start(
+        mode: .translation,
+        onError: { message in errors.append(message) },
+        onTranscript: { transcript in await transcripts.append(transcript) }
+    )
+    audio.yield(pipelineAudioChunk(timestamp: 0))
+    try await pipelineEventually { errors.count == 1 }
+    audio.yield(pipelineAudioChunk(timestamp: 3))
+    try await pipelineEventually { await transcripts.count == 2 }
+
+    #expect(await translation.callCount == 1)
+    #expect(audio.stopCount == 0)
+    await pipeline.stop()
+}
+
+@Test @MainActor
+func stoppedTranslationWorkerIgnoresLateResponse() async throws {
+    let audio = PipelineAudioEngine()
+    let translation = BlockingPipelineTranslationEngine()
+    let overlay = PipelineOverlayEngine()
+    let pipeline = SubtitlePipeline(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: PipelineWhisperEngine(text: "Late line"),
+        translationEngine: translation,
+        overlayEngine: overlay,
+        settingsStore: PipelineSettingsStore()
+    )
+
+    await pipeline.start(mode: .translation, onError: { _ in })
+    audio.yield(pipelineAudioChunk(timestamp: 0))
+    try await pipelineEventually { await translation.callCount == 1 }
+    await pipeline.stop()
+    await translation.releaseFirst()
+    try await Task.sleep(for: .milliseconds(30))
+
+    #expect(overlay.updateCount == 0)
+}
+
+@Test @MainActor
 func audioDiagnosticsSkipStaleSnapshotsWhenUIIsBusy() async throws {
     let audio = PipelineAudioEngine()
     let recorder = SlowAudioDiagnosticsRecorder()
@@ -314,16 +496,62 @@ private actor PipelineScriptedWhisperEngine: WhisperEngineProtocol {
 private actor PipelineTranslationEngine: TranslationEngineProtocol {
     private(set) var callCount = 0
     private(set) var originalTexts: [String] = []
+    private(set) var contextTexts: [[String]] = []
 
-    func translate(_ transcript: Transcript, settings: AppSettings) async throws -> SubtitleItem {
+    func translate(_ request: TranslationRequest, settings: AppSettings) async throws -> SubtitleItem {
         callCount += 1
+        let transcript = request.current
         originalTexts.append(transcript.text)
+        contextTexts.append(request.context.map(\.text))
         return SubtitleItem(
             original: transcript.text,
             translated: "Bản dịch",
             start: transcript.timestamp,
             end: transcript.timestamp + 2
         )
+    }
+}
+
+private actor BlockingPipelineTranslationEngine: TranslationEngineProtocol {
+    private(set) var callCount = 0
+    private(set) var originalTexts: [String] = []
+    private var firstContinuation: CheckedContinuation<Void, Never>?
+    private var shouldBlockFirst = true
+
+    func translate(_ request: TranslationRequest, settings: AppSettings) async throws -> SubtitleItem {
+        callCount += 1
+        originalTexts.append(request.current.text)
+        if shouldBlockFirst {
+            shouldBlockFirst = false
+            await withCheckedContinuation { continuation in
+                firstContinuation = continuation
+            }
+        }
+        return SubtitleItem(
+            original: request.current.text,
+            translated: "Bản dịch",
+            start: request.current.timestamp,
+            end: request.current.timestamp + 2
+        )
+    }
+
+    func releaseFirst() {
+        firstContinuation?.resume()
+        firstContinuation = nil
+    }
+}
+
+private actor FailingPipelineTranslationEngine: TranslationEngineProtocol {
+    let error: any Error
+    private(set) var callCount = 0
+
+    init(error: any Error) {
+        self.error = error
+    }
+
+    func translate(_ request: TranslationRequest, settings: AppSettings) async throws -> SubtitleItem {
+        callCount += 1
+        throw error
     }
 }
 
@@ -361,6 +589,17 @@ private actor PipelineTranscriptRecorder {
 
     func append(_ transcript: Transcript) {
         values.append(transcript)
+    }
+}
+
+private final class PipelineMessageRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String] = []
+    var count: Int { lock.withLock { values.count } }
+    var latest: String? { lock.withLock { values.last } }
+
+    func append(_ message: String) {
+        lock.withLock { values.append(message) }
     }
 }
 

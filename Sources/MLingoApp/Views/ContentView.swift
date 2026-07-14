@@ -100,6 +100,14 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
                     .accessibilityLabel("Error: \(lastError)")
+            } else if let lastWarning = viewModel.lastWarning {
+                Label(lastWarning, systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    .accessibilityLabel("Warning: \(lastWarning)")
             } else {
                 Text(privacyDescription)
                     .font(.callout)
