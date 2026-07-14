@@ -8,7 +8,9 @@ public final class CoreAudioTapEngine: AudioEngineProtocol, @unchecked Sendable 
     private var chunkContinuation: AsyncStream<AudioChunk>.Continuation?
     private var diagnosticsContinuation: AsyncStream<AudioCaptureDiagnostics>.Continuation?
     private var captureState: AudioCaptureState = .idle
-    private var diagnosticsAccumulator = AudioCaptureDiagnosticsAccumulator()
+    private var diagnosticsAccumulator = AudioCaptureDiagnosticsAccumulator(
+        backend: .coreAudioTap
+    )
 
     public let chunks: AsyncStream<AudioChunk>
     public let diagnostics: AsyncStream<AudioCaptureDiagnostics>

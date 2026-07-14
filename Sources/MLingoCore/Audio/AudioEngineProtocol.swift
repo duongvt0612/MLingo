@@ -1,5 +1,28 @@
 import Foundation
 
+public enum AudioCaptureBackend: String, Equatable, Sendable {
+    case coreAudioTap
+    case screenCaptureKit
+
+    public var displayName: String {
+        switch self {
+        case .coreAudioTap:
+            "Core Audio tap"
+        case .screenCaptureKit:
+            "ScreenCaptureKit"
+        }
+    }
+
+    public var permissionDisplayName: String {
+        switch self {
+        case .coreAudioTap:
+            "System Audio Recording"
+        case .screenCaptureKit:
+            "Screen Recording"
+        }
+    }
+}
+
 public enum AudioCaptureState: Equatable, Sendable {
     case idle
     case requestingPermission
@@ -9,6 +32,7 @@ public enum AudioCaptureState: Equatable, Sendable {
 }
 
 public struct AudioCaptureDiagnostics: Equatable, Sendable {
+    public var backend: AudioCaptureBackend?
     public var rms: Float
     public var peak: Float
     public var sampleRate: Double
@@ -23,6 +47,7 @@ public struct AudioCaptureDiagnostics: Equatable, Sendable {
     public var state: AudioCaptureState
 
     public init(
+        backend: AudioCaptureBackend? = nil,
         rms: Float = 0,
         peak: Float = 0,
         sampleRate: Double = 0,
@@ -36,6 +61,7 @@ public struct AudioCaptureDiagnostics: Equatable, Sendable {
         lastUpdated: Date? = nil,
         state: AudioCaptureState = .idle
     ) {
+        self.backend = backend
         self.rms = rms
         self.peak = peak
         self.sampleRate = sampleRate
