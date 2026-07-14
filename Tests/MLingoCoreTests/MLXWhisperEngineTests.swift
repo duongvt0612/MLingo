@@ -73,6 +73,13 @@ func mlxBackendResolvesOnlyManagedLegacyMLXModelIDs() {
 }
 
 @Test
+func mlxBackendUsesShortDecodeBudgetForLiveWindows() {
+    #expect(MLXAudioWhisperBackend.maximumTokenCount(sampleCount: 24_000) == 48)
+    #expect(MLXAudioWhisperBackend.maximumTokenCount(sampleCount: 64_000) == 64)
+    #expect(MLXAudioWhisperBackend.maximumTokenCount(sampleCount: 480_000) == 128)
+}
+
+@Test
 func mlxBackendRejectsMissingMetalLibraryBeforeLoadingModel() async {
     let backend = MLXAudioWhisperBackend(isMetalLibraryAvailable: { false })
 
