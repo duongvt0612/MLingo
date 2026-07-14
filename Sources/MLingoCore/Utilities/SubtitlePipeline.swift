@@ -10,7 +10,7 @@ public final class SubtitlePipeline {
     public typealias TranscriptHandler = @Sendable (Transcript) async -> Void
     public typealias WhisperDiagnosticsHandler = @Sendable (WhisperDiagnostics) async -> Void
 
-    private let audioEngine: AudioEngineProtocol
+    private let audioEngineFactory: any AudioEngineFactoryProtocol
     private let translationEngine: TranslationEngineProtocol
     private let overlayEngine: OverlayEngineProtocol
     private let settingsStore: SettingsStoreProtocol
@@ -18,19 +18,20 @@ public final class SubtitlePipeline {
 
     private var task: Task<Void, Never>?
     private var diagnosticsTask: Task<Void, Never>?
+    private var activeAudioEngine: (any AudioEngineProtocol)?
     private var queue = OrderedSubtitleQueue()
     private var sessionID: UUID?
     private var activeMode: SubtitlePipelineMode?
     private var overlayVisible = false
 
     public init(
-        audioEngine: AudioEngineProtocol,
+        audioEngineFactory: any AudioEngineFactoryProtocol,
         whisperEngine: WhisperEngineProtocol,
         translationEngine: TranslationEngineProtocol,
         overlayEngine: OverlayEngineProtocol,
         settingsStore: SettingsStoreProtocol
     ) {
-        self.audioEngine = audioEngine
+        self.audioEngineFactory = audioEngineFactory
         self.translationEngine = translationEngine
         self.overlayEngine = overlayEngine
         self.settingsStore = settingsStore
@@ -77,8 +78,15 @@ public final class SubtitlePipeline {
                     )
                 }
             )
-            try await audioEngine.start()
             guard sessionID == newSessionID else { return }
+
+            let audioEngine = audioEngineFactory.makeAudioEngine()
+            activeAudioEngine = audioEngine
+            try await audioEngine.start()
+            guard sessionID == newSessionID else {
+                await audioEngine.stop()
+                return
+            }
 
             if mode == .translation {
                 overlayEngine.show()
@@ -87,18 +95,20 @@ public final class SubtitlePipeline {
             MLingoLogger.pipeline.info("Subtitle pipeline started")
 
             if let onAudioDiagnostics {
-                diagnosticsTask = Task { [audioEngine] in
+                diagnosticsTask = Task { [weak self, audioEngine] in
                     for await diagnostics in audioEngine.diagnostics {
                         if Task.isCancelled { return }
+                        guard self?.isCurrentSession(newSessionID) == true else { return }
                         await onAudioDiagnostics(diagnostics)
                     }
                 }
             }
 
             let coordinator = transcriptionCoordinator
-            task = Task { [audioEngine] in
+            task = Task { [weak self, audioEngine] in
                 for await chunk in audioEngine.chunks {
                     if Task.isCancelled { return }
+                    guard self?.isCurrentSession(newSessionID) == true else { return }
                     await coordinator.ingest(chunk)
                 }
             }
@@ -122,8 +132,10 @@ public final class SubtitlePipeline {
         task = nil
         diagnosticsTask?.cancel()
         diagnosticsTask = nil
+        let audioEngine = activeAudioEngine
+        activeAudioEngine = nil
         await transcriptionCoordinator.stop()
-        await audioEngine.stop()
+        await audioEngine?.stop()
         queue = OrderedSubtitleQueue()
         if overlayVisible {
             overlayEngine.hide()
@@ -169,5 +181,9 @@ public final class SubtitlePipeline {
     ) {
         guard sessionID == expectedSessionID else { return }
         handler(message)
+    }
+
+    private func isCurrentSession(_ expectedSessionID: UUID) -> Bool {
+        sessionID == expectedSessionID
     }
 }

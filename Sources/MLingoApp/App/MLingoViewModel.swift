@@ -29,6 +29,7 @@ final class MLingoViewModel {
     private let settingsStore: SettingsStoreProtocol
     private let apiKeyStore: APIKeyStoreProtocol
     private let pipeline: SubtitlePipeline
+    private let audioEngineFactory: any AudioEngineFactoryProtocol
     private var startTask: Task<Void, Never>?
     private var activeSessionID = UUID()
     private var soundTestEngine: (any AudioEngineProtocol)?
@@ -38,12 +39,14 @@ final class MLingoViewModel {
         settings: AppSettings,
         settingsStore: SettingsStoreProtocol,
         apiKeyStore: APIKeyStoreProtocol,
-        pipeline: SubtitlePipeline
+        pipeline: SubtitlePipeline,
+        audioEngineFactory: any AudioEngineFactoryProtocol
     ) {
         self.settings = settings
         self.settingsStore = settingsStore
         self.apiKeyStore = apiKeyStore
         self.pipeline = pipeline
+        self.audioEngineFactory = audioEngineFactory
         whisperDiagnostics.modelID = settings.whisperModel
     }
 
@@ -52,8 +55,9 @@ final class MLingoViewModel {
         let apiKeyStore = KeychainAPIKeyStore()
         let overlay = FloatingSubtitleWindowController()
         let translation = OpenAITranslationEngine(apiKeyStore: apiKeyStore)
+        let audioEngineFactory = SystemAudioEngineFactory()
         let pipeline = SubtitlePipeline(
-            audioEngine: ScreenCaptureAudioEngine(),
+            audioEngineFactory: audioEngineFactory,
             whisperEngine: MLXWhisperEngine(),
             translationEngine: translation,
             overlayEngine: overlay,
@@ -64,7 +68,8 @@ final class MLingoViewModel {
             settings: AppSettings(),
             settingsStore: settingsStore,
             apiKeyStore: apiKeyStore,
-            pipeline: pipeline
+            pipeline: pipeline,
+            audioEngineFactory: audioEngineFactory
         )
     }
 
@@ -124,7 +129,7 @@ final class MLingoViewModel {
         startTask = Task {
             defer { clearStartTask(for: sessionID) }
 
-            let audioEngine = ScreenCaptureAudioEngine()
+            let audioEngine = audioEngineFactory.makeAudioEngine()
             soundTestEngine = audioEngine
             soundDiagnosticsTask = Task { [weak self, audioEngine, sessionID] in
                 for await diagnostics in audioEngine.diagnostics {

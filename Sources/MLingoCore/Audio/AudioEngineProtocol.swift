@@ -59,3 +59,15 @@ public protocol AudioEngineProtocol: AnyObject, Sendable {
     func start() async throws
     func stop() async
 }
+
+public protocol AudioEngineFactoryProtocol: Sendable {
+    func makeAudioEngine() -> any AudioEngineProtocol
+}
+
+public struct SystemAudioEngineFactory: AudioEngineFactoryProtocol {
+    public init() {}
+
+    public func makeAudioEngine() -> any AudioEngineProtocol {
+        ScreenCaptureAudioEngine()
+    }
+}
