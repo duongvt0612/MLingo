@@ -60,10 +60,6 @@ public final class FloatingSubtitleWindowController: OverlayEngineProtocol {
         }
     }
 
-    public func show() {
-        show(settings: lastSettings)
-    }
-
     public func show(settings: AppSettings) {
         lastSettings = settings
         lastSubtitle = nil
