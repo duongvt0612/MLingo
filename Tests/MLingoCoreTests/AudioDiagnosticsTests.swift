@@ -29,7 +29,10 @@ func audioLevelAnalyzerDropsSilenceBelowThreshold() {
 
 @Test
 func diagnosticsAccumulatorTracksChunkCounters() {
-    var accumulator = AudioCaptureDiagnosticsAccumulator(backend: .coreAudioTap)
+    var accumulator = AudioCaptureDiagnosticsAccumulator(
+        diagnostics: AudioCaptureDiagnostics(vadThreshold: 0.003),
+        backend: .coreAudioTap
+    )
     let chunk = AudioChunk(
         samples: [0.02, -0.02],
         sampleRate: 16_000,
@@ -57,6 +60,7 @@ func diagnosticsAccumulatorTracksChunkCounters() {
 
     let reset = accumulator.reset(state: .requestingPermission)
     #expect(reset.backend == .coreAudioTap)
+    #expect(reset.vadThreshold == 0.003)
 }
 
 @Test
