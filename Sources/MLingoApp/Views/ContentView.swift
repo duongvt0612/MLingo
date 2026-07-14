@@ -232,6 +232,8 @@ struct ContentView: View {
                 .accessibilityElement(children: .combine)
             }
 
+            transcriptionResultPanel
+
             LazyVGrid(
                 columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)],
                 alignment: .leading,
@@ -253,18 +255,54 @@ struct ContentView: View {
                     .textSelection(.enabled)
             }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Last transcript")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text(viewModel.whisperDiagnostics.lastTranscript.isEmpty ? "No transcript yet" : viewModel.whisperDiagnostics.lastTranscript)
-                    .font(.callout)
-                    .foregroundStyle(viewModel.whisperDiagnostics.lastTranscript.isEmpty ? .secondary : .primary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var transcriptionResultPanel: some View {
+        let transcript = viewModel.transcriptionText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasTranscript = !transcript.isEmpty
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Label("Speech-to-text result", systemImage: "text.bubble")
+                    .font(.callout.weight(.semibold))
+                Spacer()
+                Text(viewModel.settings.sourceLanguage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(hasTranscript ? transcript : transcriptionResultPlaceholder)
+                .font(hasTranscript ? .body : .callout)
+                .foregroundStyle(hasTranscript ? .primary : .secondary)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, minHeight: 72, alignment: .topLeading)
+        }
+        .padding(14)
+        .background(
+            Color(nsColor: .textBackgroundColor).opacity(0.55),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(.separator.opacity(0.7), lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Speech-to-text result in \(viewModel.settings.sourceLanguage)")
+        .accessibilityValue(hasTranscript ? transcript : transcriptionResultPlaceholder)
+    }
+
+    private var transcriptionResultPlaceholder: String {
+        switch viewModel.activeMode {
+        case .transcriptionTest:
+            "Listening for speech… Play audio to verify the recognized text here."
+        case .translation:
+            "Listening for source speech before translation…"
+        default:
+            "Start Test Transcription, then play audio to verify Whisper before translating."
+        }
     }
 
     private var settingsSummary: some View {

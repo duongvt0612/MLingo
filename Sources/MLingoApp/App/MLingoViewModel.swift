@@ -17,6 +17,7 @@ final class MLingoViewModel {
     private(set) var activeMode: ActiveMode = .idle
     var status = "Ready"
     var lastError: String?
+    private(set) var transcriptionText = ""
     var audioDiagnostics = AudioCaptureDiagnostics()
     var whisperDiagnostics = WhisperDiagnostics()
 
@@ -165,6 +166,7 @@ final class MLingoViewModel {
         activeMode = viewMode
         status = startingStatus
         lastError = nil
+        transcriptionText = ""
         whisperDiagnostics = WhisperDiagnostics(
             modelState: .loading,
             modelID: settings.whisperModel
@@ -192,7 +194,12 @@ final class MLingoViewModel {
                         self?.audioDiagnostics = diagnostics
                     }
                 },
-                onTranscript: { _ in },
+                onTranscript: { [weak self, sessionID] transcript in
+                    await MainActor.run {
+                        guard self?.activeSessionID == sessionID else { return }
+                        self?.appendTranscriptionText(transcript.text)
+                    }
+                },
                 onWhisperDiagnostics: { [weak self, sessionID] diagnostics in
                     await MainActor.run {
                         guard self?.activeSessionID == sessionID else { return }
@@ -240,6 +247,15 @@ final class MLingoViewModel {
         if activeSessionID == sessionID {
             startTask = nil
         }
+    }
+
+    private func appendTranscriptionText(_ text: String) {
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return }
+
+        transcriptionText = transcriptionText.isEmpty
+            ? trimmedText
+            : "\(transcriptionText)\n\(trimmedText)"
     }
 
     private func isCurrentSession(_ sessionID: UUID, mode: ActiveMode) -> Bool {
