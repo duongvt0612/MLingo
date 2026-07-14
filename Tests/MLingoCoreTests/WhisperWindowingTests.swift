@@ -153,6 +153,22 @@ func transcriptDeduplicatorTrimsFuzzyOverlapFromOverlappingAudio() throws {
 }
 
 @Test
+func transcriptDeduplicatorTrimsFuzzyOverlapWhenLeadingWordIsRedecoded() throws {
+    var deduplicator = TranscriptDeduplicator()
+    _ = deduplicator.process(
+        Transcript(text: "This is a good solution", timestamp: 1)
+    )
+
+    let processedNext = deduplicator.process(
+        Transcript(text: "It is a good solution for translation", timestamp: 2),
+        audioOverlapDuration: 0.4
+    )
+    let next = try #require(processedNext)
+
+    #expect(next.text == "for translation")
+}
+
+@Test
 func transcriptDeduplicatorTrimsSingleRepeatedTokenOnlyForOverlappingAudio() throws {
     var deduplicator = TranscriptDeduplicator()
     _ = deduplicator.process(Transcript(text: "Please continue", timestamp: 1))
