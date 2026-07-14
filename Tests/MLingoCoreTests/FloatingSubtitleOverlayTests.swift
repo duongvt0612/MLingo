@@ -69,6 +69,13 @@ func overlayDisplayResolverUsesPinnedDisplayAndFallsBackToAutomatic() throws {
     )
 }
 
+@Test @MainActor
+func appKitOverlayDisplayCatalogHandlesMissingApplicationWindows() {
+    let catalog = AppKitOverlayDisplayCatalog()
+
+    #expect(catalog.currentAppWindowDisplayID() == nil)
+}
+
 @Test
 func overlayPlacementRoundTripsAcrossVisibleFrameChanges() {
     let originalVisibleFrame = CGRect(x: 100, y: 50, width: 1_000, height: 800)
