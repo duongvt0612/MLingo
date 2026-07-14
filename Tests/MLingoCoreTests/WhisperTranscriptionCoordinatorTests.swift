@@ -49,6 +49,9 @@ func coordinatorSerializesInferenceAndReportsWindowDiagnostics() async throws {
     )
 
     await coordinator.ingest(testAudioChunk(duration: 3, timestamp: 20))
+    try await eventually {
+        await diagnosticsRecorder.latest.processedWindowCount == 2
+    }
     await coordinator.ingest(testAudioChunk(duration: 3, timestamp: 23))
 
     try await eventually {
@@ -59,7 +62,7 @@ func coordinatorSerializesInferenceAndReportsWindowDiagnostics() async throws {
     let latest = await diagnosticsRecorder.latest
     #expect(latest.modelState == .ready)
     #expect(latest.modelID == "fixture/whisper")
-    #expect(latest.windowDuration == 1.5)
+    #expect(abs(latest.windowDuration - 2.6) < 0.001)
     #expect(latest.inferenceLatency > 0)
     let timestamps = await transcriptRecorder.timestamps
     let expectedTimestamps = [20.0, 21.5, 22.6, 23.7]

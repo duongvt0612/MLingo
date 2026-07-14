@@ -17,7 +17,7 @@ public actor WhisperTranscriptionCoordinator {
     private var errorHandler: ErrorHandler?
     private var silenceTask: Task<Void, Never>?
     private var processingTask: Task<Void, Never>?
-    private var windowContinuation: AsyncStream<AudioChunk>.Continuation?
+    private var pendingWindow: AudioChunk?
     private var latestProcessedAudioEnd: TimeInterval?
 
     public init(engine: WhisperEngineProtocol) {
@@ -72,14 +72,7 @@ public actor WhisperTranscriptionCoordinator {
         diagnostics.modelState = .ready
         await onDiagnostics(diagnostics)
 
-        let (stream, continuation) = AsyncStream.makeStream(of: AudioChunk.self)
-        windowContinuation = continuation
-        processingTask = Task { [weak self] in
-            for await window in stream {
-                guard !Task.isCancelled else { return }
-                await self?.process(window, sessionID: newSessionID)
-            }
-        }
+        pendingWindow = nil
     }
 
     public func ingest(_ chunk: AudioChunk) {
@@ -88,7 +81,7 @@ public actor WhisperTranscriptionCoordinator {
         silenceTask?.cancel()
         let windows = accumulator.append(chunk)
         for window in windows {
-            windowContinuation?.yield(window)
+            enqueue(window, sessionID: sessionID)
         }
 
         let delay = configuration.silenceFlushDelay
@@ -106,10 +99,9 @@ public actor WhisperTranscriptionCoordinator {
         sessionID = nil
         silenceTask?.cancel()
         silenceTask = nil
-        windowContinuation?.finish()
-        windowContinuation = nil
         processingTask?.cancel()
         processingTask = nil
+        pendingWindow = nil
         accumulator.reset()
         deduplicator.reset()
         latestProcessedAudioEnd = nil
@@ -121,8 +113,101 @@ public actor WhisperTranscriptionCoordinator {
     private func flushForSilence(sessionID expectedSessionID: UUID) {
         guard sessionID == expectedSessionID else { return }
         if let window = accumulator.flushForSilence() {
-            windowContinuation?.yield(window)
+            enqueue(window, sessionID: expectedSessionID)
         }
+    }
+
+    private func enqueue(_ window: AudioChunk, sessionID expectedSessionID: UUID) {
+        guard sessionID == expectedSessionID else { return }
+
+        if processingTask == nil {
+            processingTask = Task { [weak self] in
+                await self?.processWindows(
+                    startingWith: window,
+                    sessionID: expectedSessionID
+                )
+            }
+            return
+        }
+
+        if let pendingWindow {
+            self.pendingWindow = Self.coalesce(
+                pendingWindow,
+                with: window,
+                maximumDuration: configuration.maximumWindowDuration
+            )
+        } else {
+            pendingWindow = window
+        }
+    }
+
+    private func processWindows(
+        startingWith firstWindow: AudioChunk,
+        sessionID expectedSessionID: UUID
+    ) async {
+        defer {
+            if sessionID == expectedSessionID {
+                processingTask = nil
+            }
+        }
+
+        var nextWindow: AudioChunk? = firstWindow
+        while let window = nextWindow,
+              sessionID == expectedSessionID,
+              !Task.isCancelled
+        {
+            await process(window, sessionID: expectedSessionID)
+            guard sessionID == expectedSessionID, !Task.isCancelled else { return }
+            nextWindow = pendingWindow
+            pendingWindow = nil
+        }
+    }
+
+    private static func coalesce(
+        _ older: AudioChunk,
+        with newer: AudioChunk,
+        maximumDuration: TimeInterval
+    ) -> AudioChunk {
+        guard
+            older.sampleRate == newer.sampleRate,
+            older.channelCount == newer.channelCount,
+            older.sampleRate > 0
+        else {
+            return newer
+        }
+
+        let sampleRate = older.sampleRate
+        let olderEnd = older.timestamp + older.duration
+        var combinedSamples = older.samples
+
+        if newer.timestamp >= olderEnd {
+            let gapSampleCount = Int(((newer.timestamp - olderEnd) * sampleRate).rounded())
+            if gapSampleCount > 0 {
+                combinedSamples.append(contentsOf: repeatElement(0, count: gapSampleCount))
+            }
+            combinedSamples.append(contentsOf: newer.samples)
+        } else {
+            let overlapSampleCount = min(
+                newer.samples.count,
+                max(0, Int(((olderEnd - newer.timestamp) * sampleRate).rounded()))
+            )
+            combinedSamples.append(contentsOf: newer.samples.dropFirst(overlapSampleCount))
+        }
+
+        let maximumSampleCount = max(1, Int((maximumDuration * sampleRate).rounded()))
+        if combinedSamples.count > maximumSampleCount {
+            combinedSamples.removeFirst(combinedSamples.count - maximumSampleCount)
+        }
+
+        let duration = Double(combinedSamples.count) / sampleRate
+        let combinedEnd = max(olderEnd, newer.timestamp + newer.duration)
+        return AudioChunk(
+            samples: combinedSamples,
+            sampleRate: sampleRate,
+            channelCount: older.channelCount,
+            timestamp: combinedEnd - duration,
+            duration: duration
+        )
     }
 
     private func process(_ window: AudioChunk, sessionID expectedSessionID: UUID) async {
