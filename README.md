@@ -56,7 +56,7 @@ Window Management
 Audio
 
 - Core Audio Process Tap (macOS 14.2+)
-- ScreenCaptureKit audio-only fallback (macOS 14.0–14.1)
+- ScreenCaptureKit audio-only (user-selectable on macOS 14.2+, fallback on 14.0–14.1)
 - AVFoundation
 
 Speech Recognition
@@ -85,12 +85,13 @@ Package Manager
 
 ## Capture System Audio
 
-Capture audio produced by any application. MLingo chooses the backend from the macOS version:
+Capture audio produced by any application. Choose the backend in Settings > Audio capture:
 
-- macOS 14.2+: Core Audio Process Tap with System Audio Recording permission.
-- macOS 14.0–14.1: ScreenCaptureKit audio-only with Screen Recording permission.
+- **System Audio** (default, macOS 14.2+): Core Audio Process Tap with System Audio Recording permission.
+- **Screen Recording**: ScreenCaptureKit audio-only with Screen Recording permission.
+- macOS 14.0–14.1 always uses the ScreenCaptureKit backend because Process Tap is unavailable.
 
-On macOS 14.2+, a denied or failed Core Audio capture does not fall back to ScreenCaptureKit, so MLingo never requests the broader Screen Recording permission on modern systems. No virtual audio device is required.
+On macOS 14.2+, a denied or failed Core Audio capture does not silently fall back to ScreenCaptureKit. Select **Screen Recording** explicitly if you want that backend. No virtual audio device is required.
 
 ---
 
@@ -152,7 +153,7 @@ Allow configuring
 System Audio
         │
         ▼
-Core Audio Tap (14.2+) / ScreenCaptureKit (14.0–14.1)
+Selected Core Audio Tap / ScreenCaptureKit backend
         │
         ▼
 Audio Buffer
@@ -328,7 +329,7 @@ Rendering
 
 The default local Whisper model is `mlx-community/whisper-base-mlx`. Model artifacts are downloaded from Hugging Face on first use and then cached locally. Audio samples are never uploaded; only recognized text enters the OpenAI translation path.
 
-The packaged app includes both capture descriptions. On macOS 14.2 or newer, grant **System Audio Recording** in System Settings > Privacy & Security > Screen & System Audio Recording. The **Screen Recording** permission is needed only for the macOS 14.0–14.1 ScreenCaptureKit fallback.
+The packaged app includes both capture descriptions. Grant the permission matching the backend selected in Settings: **System Audio Recording** for System Audio, or **Screen Recording** for Screen Recording. On macOS 14.0–14.1, only the ScreenCaptureKit option is available at runtime.
 
 To run Whisper, open `Package.swift` in Xcode, select the `MLingo` scheme, and press Run. Install the Metal Toolchain first if Xcode has not already installed it:
 

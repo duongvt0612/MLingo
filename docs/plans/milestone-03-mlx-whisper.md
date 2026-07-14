@@ -12,7 +12,7 @@ Thay `MLXWhisperEngine` placeholder bằng inference native Swift trên Apple Si
 - [x] Model mặc định `mlx-community/whisper-base-mlx`.
 - [x] Migrate chính xác model cũ `mlx-community/whisper-small` sang `mlx-community/whisper-small-mlx`.
 - [x] Ép source language, bỏ transcript rỗng và ánh xạ lỗi load/inference.
-- [x] Adaptive window: silence 0,5 giây, speech tối thiểu 0,4 giây, hard limit 3 giây và overlap 0,4 giây.
+- [x] Adaptive window: tìm speech boundary yên ít nhất 0,1 giây gần mốc 1,5 giây để cắt không overlap; chỉ giữ overlap 0,4 giây khi speech liên tục chạm hard limit 3 giây.
 - [x] Inference tuần tự, dedupe exact/near-duplicate và suffix/prefix overlap.
 - [x] Session cancellation chặn callback transcript/diagnostics cũ sau stop/restart.
 - [x] Pipeline có hai mode `.transcriptionOnly` và `.translation`.
@@ -22,10 +22,11 @@ Thay `MLXWhisperEngine` placeholder bằng inference native Swift trên Apple Si
 - [x] Fixture `jfk.flac` có attribution và test MLX thật dạng opt-in.
 - [x] Mỗi capture session tạo engine và `AsyncStream` mới; Stop → Start không tái sử dụng stream đã terminated.
 - [x] macOS 14.2+ dùng Core Audio Process Tap; macOS 14.0–14.1 fallback ScreenCaptureKit audio-only.
+- [x] Settings cho phép chọn System Audio hoặc Screen Recording; sound test và cả hai pipeline mode dùng chung lựa chọn.
 
 ## Quyền riêng tư và tải model
 
-Audio samples chỉ đi từ Core Audio Process Tap (macOS 14.2+) hoặc ScreenCaptureKit audio-only (macOS 14.0–14.1) đến MLX Whisper trong process của ứng dụng. MLingo không upload audio. Trên macOS 14.2+, ứng dụng chỉ yêu cầu System Audio Recording và không fallback sang Screen Recording nếu người dùng từ chối. Lần đầu load model/tokenizer, thư viện có thể tải artifact từ Hugging Face; các lần sau dùng cache cục bộ và cùng model ID được reuse trong memory.
+Audio samples chỉ đi từ backend người dùng chọn — Core Audio Process Tap hoặc ScreenCaptureKit audio-only — đến MLX Whisper trong process của ứng dụng. MLingo không upload audio. Trên macOS 14.2+, ứng dụng không tự fallback sang Screen Recording nếu System Audio bị từ chối; người dùng phải chọn backend Screen Recording trong Settings. Trên macOS 14.0–14.1, Process Tap không khả dụng nên factory dùng ScreenCaptureKit. Lần đầu load model/tokenizer, thư viện có thể tải artifact từ Hugging Face; các lần sau dùng cache cục bộ và cùng model ID được reuse trong memory.
 
 Hai ID do MLingo quản lý (`whisper-base-mlx` và `whisper-small-mlx`) hiện trỏ tới repository legacy chỉ có `weights.npz`, trong khi loader 0.1.3 nhận `safetensors`. Backend resolve chúng sang mirror F16 tương ứng (`*-asr-fp16`, khoảng 144 MB cho base) lúc load. Giá trị settings và custom model ID không bị rewrite.
 
@@ -78,7 +79,7 @@ ask not what your country can do for you
 - [ ] Test Transcription chạy khi không có OpenAI API key và không mở overlay.
 - [ ] YouTube/VLC tạo transcript đúng thứ tự, không spam duplicate.
 - [ ] Stop/start nhiều lần không crash và không nhận callback session cũ.
-- [ ] Stop/start ít nhất 5 lần vẫn nhận meter trong 1 giây; status panel hiển thị đúng Core Audio tap hoặc ScreenCaptureKit.
+- [ ] Chuyển qua lại System Audio/Screen Recording, Stop/start mỗi backend ít nhất 5 lần vẫn nhận meter trong 1 giây và status panel hiển thị đúng backend.
 - [ ] Lỗi mạng/model hiển thị rõ và có thể thử lại.
 - [ ] Sau warm-up trên M4 Pro, benchmark ít nhất 10 window: median ≤ 1.200 ms, p95 ≤ 2.000 ms; không tính model load.
 
