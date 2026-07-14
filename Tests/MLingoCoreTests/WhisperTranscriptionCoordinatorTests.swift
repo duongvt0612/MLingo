@@ -31,6 +31,71 @@ func coordinatorFlushesShortSpeechAfterSilence() async throws {
 }
 
 @Test
+func coordinatorPreservesQuietAudioAroundSpeechWithoutDeferringSilenceFlush() async throws {
+    let engine = SequencingWhisperEngine()
+    let coordinator = WhisperTranscriptionCoordinator(
+        engine: engine,
+        configuration: .init(
+            minimumSpeechDuration: 0.1,
+            preferredWindowDuration: 1,
+            maximumWindowDuration: 2,
+            silenceFlushDelay: 0.03,
+            overlapDuration: 0.1
+        )
+    )
+
+    try await coordinator.start(
+        modelID: "fixture/whisper",
+        language: "English",
+        onTranscript: { _ in }
+    )
+    await coordinator.ingest(
+        testAudioChunk(
+            duration: 0.2,
+            timestamp: 0,
+            sampleValue: 0.001,
+            isSpeechLike: false
+        )
+    )
+    await coordinator.ingest(
+        testAudioChunk(
+            duration: 0.2,
+            timestamp: 0.2,
+            sampleValue: 0.05,
+            isSpeechLike: true
+        )
+    )
+    await coordinator.ingest(
+        testAudioChunk(
+            duration: 0.1,
+            timestamp: 0.4,
+            sampleValue: 0.001,
+            isSpeechLike: false
+        )
+    )
+    try await Task.sleep(for: .milliseconds(10))
+    await coordinator.ingest(
+        testAudioChunk(
+            duration: 0.1,
+            timestamp: 0.5,
+            sampleValue: 0.001,
+            isSpeechLike: false
+        )
+    )
+
+    try await eventually {
+        await engine.inferenceWindows.count == 1
+    }
+    let window = try #require(await engine.inferenceWindows.first)
+    #expect(abs(window.timestamp - 0) < 0.001)
+    #expect(abs(window.duration - 0.6) < 0.001)
+    #expect(window.samples.first == 0.001)
+    #expect(window.samples[Int(0.25 * 16_000)] == 0.05)
+    #expect(window.samples.last == 0.001)
+    await coordinator.stop()
+}
+
+@Test
 func coordinatorSerializesInferenceAndReportsWindowDiagnostics() async throws {
     let engine = SequencingWhisperEngine(inferenceDelay: .milliseconds(20))
     let diagnosticsRecorder = DiagnosticsRecorder()
@@ -186,6 +251,7 @@ private actor SequencingWhisperEngine: WhisperEngineProtocol {
     private var inferenceCount = 0
     private var concurrentInferenceCount = 0
     private(set) var maximumConcurrentInferenceCount = 0
+    private(set) var inferenceWindows: [AudioChunk] = []
 
     init(inferenceDelay: Duration = .zero) {
         self.inferenceDelay = inferenceDelay
@@ -194,6 +260,7 @@ private actor SequencingWhisperEngine: WhisperEngineProtocol {
     func loadModel(named modelName: String) async throws {}
 
     func transcribe(_ chunk: AudioChunk, language: String) async throws -> Transcript? {
+        inferenceWindows.append(chunk)
         concurrentInferenceCount += 1
         maximumConcurrentInferenceCount = max(
             maximumConcurrentInferenceCount,
@@ -272,13 +339,16 @@ private func eventually(
 
 private func testAudioChunk(
     duration: TimeInterval,
-    timestamp: TimeInterval
+    timestamp: TimeInterval,
+    sampleValue: Float = 0.05,
+    isSpeechLike: Bool = true
 ) -> AudioChunk {
     AudioChunk(
-        samples: Array(repeating: 0.05, count: Int((duration * 16_000).rounded())),
+        samples: Array(repeating: sampleValue, count: Int((duration * 16_000).rounded())),
         sampleRate: 16_000,
         channelCount: 1,
         timestamp: timestamp,
-        duration: duration
+        duration: duration,
+        isSpeechLike: isSpeechLike
     )
 }
