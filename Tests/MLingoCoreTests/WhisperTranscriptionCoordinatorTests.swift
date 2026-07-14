@@ -102,7 +102,7 @@ func coordinatorStopSuppressesCallbacksFromPreviousSession() async throws {
 }
 
 @Test
-func coordinatorCoalescesPendingWindowsWhenInferenceFallsBehind() async throws {
+func coordinatorPreservesPendingAudioWhenInferenceFallsBehind() async throws {
     let engine = BlockingWhisperEngine()
     let coordinator = WhisperTranscriptionCoordinator(
         engine: engine,
@@ -131,8 +131,23 @@ func coordinatorCoalescesPendingWindowsWhenInferenceFallsBehind() async throws {
     }
 
     let windows = await engine.inferenceWindows
-    #expect(abs(windows[1].duration - 3) < 0.001)
-    #expect(abs(windows[1].timestamp - 2) < 0.001)
+    #expect(abs(windows[1].duration - 2.6) < 0.001)
+    #expect(abs(windows[1].timestamp - 0.8) < 0.001)
+
+    await engine.completePendingInference(text: "second")
+    try await eventually {
+        await engine.inferenceWindows.count >= 3
+    }
+
+    let preservedWindows = await engine.inferenceWindows
+    guard preservedWindows.count >= 3 else {
+        await coordinator.stop()
+        await engine.completePendingInference(text: "cancelled")
+        return
+    }
+    let secondWindowEnd = preservedWindows[1].timestamp + preservedWindows[1].duration
+    #expect(preservedWindows[2].timestamp <= secondWindowEnd)
+    #expect(abs(preservedWindows[2].timestamp - 3.2) < 0.001)
 
     await coordinator.stop()
     await engine.completePendingInference(text: "cancelled")
