@@ -79,6 +79,24 @@ struct SettingsView: View {
             }
 
             Section("Subtitles") {
+                Picker("Overlay display", selection: $draft.overlayDisplaySelection) {
+                    Text("Automatic").tag(OverlayDisplaySelection.automatic)
+                    ForEach(viewModel.overlayPresentationState.availableDisplays) { display in
+                        Text(display.name).tag(OverlayDisplaySelection.display(id: display.id))
+                    }
+                    if let unavailableDisplaySelection {
+                        Text("Unavailable display")
+                            .tag(unavailableDisplaySelection)
+                    }
+                }
+                .disabled(viewModel.isRunning)
+                .accessibilityLabel("Overlay display")
+                .accessibilityHint(
+                    viewModel.isRunning
+                        ? "Stop live translation to change the display here, or use the overlay HUD"
+                        : "Choose where subtitles appear"
+                )
+
                 Slider(value: $draft.settings.subtitleFontSize, in: 18...64, step: 1) {
                     Text("Font size")
                 } minimumValueLabel: {
@@ -124,7 +142,11 @@ struct SettingsView: View {
                     showsOpenAIValidation = true
                     guard openAIValidation.hasValidTranslationSettings else { return }
                     Task {
-                        if await viewModel.save(draft.settings, apiKey: draft.apiKey) {
+                        if await viewModel.save(
+                            draft.settings,
+                            apiKey: draft.apiKey,
+                            overlayDisplaySelection: draft.overlayDisplaySelection
+                        ) {
                             dismiss()
                         }
                     }
@@ -144,7 +166,11 @@ struct SettingsView: View {
         .task {
             await viewModel.load()
             guard !Task.isCancelled else { return }
-            draft = SettingsDraft(settings: viewModel.settings, apiKey: viewModel.apiKey)
+            draft = SettingsDraft(
+                settings: viewModel.settings,
+                apiKey: viewModel.apiKey,
+                overlayDisplaySelection: viewModel.overlayPresentationState.selectedDisplay
+            )
             isDraftLoaded = true
             viewModel.resetTranslationTest()
         }
@@ -152,6 +178,11 @@ struct SettingsView: View {
         .onChange(of: draft.settings.openAIModel) { _, _ in viewModel.resetTranslationTest() }
         .onChange(of: draft.settings.sourceLanguage) { _, _ in viewModel.resetTranslationTest() }
         .onChange(of: draft.settings.targetLanguage) { _, _ in viewModel.resetTranslationTest() }
+        .onChange(of: viewModel.overlayPresentationState.selectedDisplay) { _, selection in
+            if viewModel.isRunning {
+                draft.overlayDisplaySelection = selection
+            }
+        }
         .onDisappear {
             translationTestTask?.cancel()
             translationTestTask = nil
@@ -160,6 +191,17 @@ struct SettingsView: View {
 
     private var openAIValidation: OpenAISettingsValidation {
         OpenAISettingsValidation(apiKey: draft.apiKey, settings: draft.settings)
+    }
+
+    private var unavailableDisplaySelection: OverlayDisplaySelection? {
+        guard case .display(let displayID) = draft.overlayDisplaySelection,
+              !viewModel.overlayPresentationState.availableDisplays.contains(
+                  where: { $0.id == displayID }
+              )
+        else {
+            return nil
+        }
+        return .display(id: displayID)
     }
 
     @ViewBuilder
@@ -229,4 +271,5 @@ struct SettingsView: View {
 private struct SettingsDraft: Equatable {
     var settings = AppSettings()
     var apiKey = ""
+    var overlayDisplaySelection = OverlayDisplaySelection.automatic
 }

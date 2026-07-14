@@ -1,6 +1,6 @@
 import Foundation
 
-public enum OverlayDisplaySelection: Codable, Equatable, Sendable {
+public enum OverlayDisplaySelection: Codable, Equatable, Hashable, Sendable {
     case automatic
     case display(id: String)
 }
