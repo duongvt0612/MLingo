@@ -28,18 +28,39 @@ func adaptiveWindowIgnoresSpeechBelowMinimumDuration() {
 }
 
 @Test
-func adaptiveWindowEmitsAtPreferredTargetAndRetainsOverlap() throws {
+func adaptiveWindowWaitsForHardLimitAndRetainsOverlapDuringContinuousSpeech() throws {
     var accumulator = AdaptiveAudioWindowAccumulator()
 
     let emitted = accumulator.append(chunk(duration: 3.2, timestamp: 20))
 
-    #expect(emitted.count == 2)
-    #expect(abs(emitted[0].duration - 1.5) < 0.001)
-    #expect(abs(emitted[1].duration - 1.5) < 0.001)
+    #expect(emitted.count == 1)
+    #expect(abs(emitted[0].duration - 3.0) < 0.001)
     #expect(emitted[0].timestamp == 20)
-    #expect(abs(emitted[1].timestamp - 21.1) < 0.001)
-    #expect(abs(accumulator.bufferedDuration - 1.0) < 0.001)
-    #expect(abs(accumulator.bufferedTimestamp - 22.2) < 0.001)
+    #expect(abs(accumulator.bufferedDuration - 0.6) < 0.001)
+    #expect(abs(accumulator.bufferedTimestamp - 22.6) < 0.001)
+}
+
+@Test
+func adaptiveWindowCutsAtQuietBoundaryWithoutRetainingOverlap() throws {
+    var accumulator = AdaptiveAudioWindowAccumulator()
+
+    #expect(accumulator.append(chunk(duration: 1.4, timestamp: 20)).isEmpty)
+    let firstWindows = accumulator.append(
+        chunk(duration: 0.2, timestamp: 21.4, isSpeechLike: false)
+    )
+    let first = try #require(firstWindows.first)
+
+    #expect(firstWindows.count == 1)
+    #expect(abs(first.duration - 1.5) < 0.001)
+    #expect(abs(accumulator.bufferedTimestamp - 21.5) < 0.001)
+
+    #expect(accumulator.append(chunk(duration: 1.4, timestamp: 21.6)).isEmpty)
+    let secondWindows = accumulator.append(
+        chunk(duration: 0.2, timestamp: 23, isSpeechLike: false)
+    )
+    let second = try #require(secondWindows.first)
+
+    #expect(abs(second.timestamp - (first.timestamp + first.duration)) < 0.001)
 }
 
 @Test
@@ -110,13 +131,18 @@ func transcriptDeduplicatorMapsNormalizedOverlapBackToRawTokens() throws {
     #expect(next.timestamp == 2)
 }
 
-private func chunk(duration: TimeInterval, timestamp: TimeInterval) -> AudioChunk {
+private func chunk(
+    duration: TimeInterval,
+    timestamp: TimeInterval,
+    isSpeechLike: Bool = true
+) -> AudioChunk {
     let sampleCount = Int((duration * 16_000).rounded())
     return AudioChunk(
         samples: Array(repeating: 0.05, count: sampleCount),
         sampleRate: 16_000,
         channelCount: 1,
         timestamp: timestamp,
-        duration: duration
+        duration: duration,
+        isSpeechLike: isSpeechLike
     )
 }

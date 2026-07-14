@@ -144,22 +144,22 @@ func coordinatorSerializesInferenceAndReportsWindowDiagnostics() async throws {
 
     await coordinator.ingest(testAudioChunk(duration: 3, timestamp: 20))
     try await eventually {
-        await diagnosticsRecorder.latest.processedWindowCount == 2
+        await diagnosticsRecorder.latest.processedWindowCount == 1
     }
     await coordinator.ingest(testAudioChunk(duration: 3, timestamp: 23))
 
     try await eventually {
-        await diagnosticsRecorder.latest.processedWindowCount == 4
+        await diagnosticsRecorder.latest.processedWindowCount == 2
     }
 
     #expect(await engine.maximumConcurrentInferenceCount == 1)
     let latest = await diagnosticsRecorder.latest
     #expect(latest.modelState == .ready)
     #expect(latest.modelID == "fixture/whisper")
-    #expect(abs(latest.windowDuration - 2.6) < 0.001)
+    #expect(abs(latest.windowDuration - 3.0) < 0.001)
     #expect(latest.inferenceLatency > 0)
     let timestamps = await transcriptRecorder.timestamps
-    let expectedTimestamps = [20.0, 21.5, 22.6, 23.7]
+    let expectedTimestamps = [20.0, 23.0]
     #expect(timestamps.count == expectedTimestamps.count)
     #expect(
         zip(timestamps, expectedTimestamps).allSatisfy { actual, expected in
@@ -213,20 +213,20 @@ func coordinatorPreservesPendingAudioWhenInferenceFallsBehind() async throws {
         language: "English",
         onTranscript: { _ in }
     )
-    await coordinator.ingest(testAudioChunk(duration: 1, timestamp: 0))
+    await coordinator.ingest(testAudioChunk(duration: 3, timestamp: 0))
     try await eventually {
         await engine.hasPendingInference
     }
 
-    await coordinator.ingest(testAudioChunk(duration: 4, timestamp: 1))
+    await coordinator.ingest(testAudioChunk(duration: 6, timestamp: 3))
     await engine.completePendingInference(text: "first")
     try await eventually {
         await engine.inferenceWindows.count >= 2
     }
 
     let windows = await engine.inferenceWindows
-    #expect(abs(windows[1].duration - 2.6) < 0.001)
-    #expect(abs(windows[1].timestamp - 0.8) < 0.001)
+    #expect(abs(windows[1].duration - 3.0) < 0.001)
+    #expect(abs(windows[1].timestamp - 2.6) < 0.001)
 
     await engine.completePendingInference(text: "second")
     try await eventually {
@@ -240,8 +240,8 @@ func coordinatorPreservesPendingAudioWhenInferenceFallsBehind() async throws {
         return
     }
     let secondWindowEnd = preservedWindows[1].timestamp + preservedWindows[1].duration
-    #expect(preservedWindows[2].timestamp <= secondWindowEnd)
-    #expect(abs(preservedWindows[2].timestamp - 3.2) < 0.001)
+    #expect(preservedWindows[2].timestamp < secondWindowEnd)
+    #expect(abs(preservedWindows[2].timestamp - 5.2) < 0.001)
 
     await coordinator.stop()
     await engine.completePendingInference(text: "cancelled")
@@ -264,14 +264,14 @@ func silenceAfterHardLimitDoesNotRetranscribeOverlapOnly() async throws {
             await diagnosticsRecorder.append(diagnostics)
         }
     )
-    await coordinator.ingest(testAudioChunk(duration: 2.6, timestamp: 40))
+    await coordinator.ingest(testAudioChunk(duration: 3, timestamp: 40))
 
     try await eventually {
-        await diagnosticsRecorder.latest.processedWindowCount == 2
+        await diagnosticsRecorder.latest.processedWindowCount == 1
     }
     try await Task.sleep(for: .milliseconds(40))
 
-    #expect(await diagnosticsRecorder.latest.processedWindowCount == 2)
+    #expect(await diagnosticsRecorder.latest.processedWindowCount == 1)
     await coordinator.stop()
 }
 
