@@ -33,9 +33,10 @@ final class SystemCoreAudioHAL: CoreAudioHALProtocol, @unchecked Sendable {
         try check(status, operation: .createProcessTap, permissionSensitive: true)
 
         do {
+            let tapUID = try readTapUID(tapID)
             let format = try readTapFormat(tapID)
             lock.withLock {
-                tapUIDs[tapID] = description.uuid.uuidString
+                tapUIDs[tapID] = tapUID
                 tapFormats[tapID] = format
             }
             return tapID
@@ -61,7 +62,6 @@ final class SystemCoreAudioHAL: CoreAudioHALProtocol, @unchecked Sendable {
             kAudioAggregateDeviceNameKey: "MLingo Private System Audio",
             kAudioAggregateDeviceUIDKey: aggregateUID,
             kAudioAggregateDeviceIsPrivateKey: true,
-            kAudioAggregateDeviceTapAutoStartKey: true,
             kAudioAggregateDeviceTapListKey: [
                 [kAudioSubTapUIDKey: tapUID]
             ],
@@ -241,6 +241,28 @@ final class SystemCoreAudioHAL: CoreAudioHALProtocol, @unchecked Sendable {
         )
         try check(status, operation: .createProcessTap)
         return format
+    }
+
+    private func readTapUID(_ tapID: AudioObjectID) throws -> String {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioTapPropertyUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size = UInt32(MemoryLayout<CFString>.stride)
+        var uid: CFString = "" as CFString
+        let status = withUnsafeMutablePointer(to: &uid) { uidPointer in
+            AudioObjectGetPropertyData(
+                tapID,
+                &address,
+                0,
+                nil,
+                &size,
+                uidPointer
+            )
+        }
+        try check(status, operation: .createProcessTap)
+        return uid as String
     }
 
     private func check(

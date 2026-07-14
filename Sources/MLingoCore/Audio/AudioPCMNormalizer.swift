@@ -10,9 +10,11 @@ enum AudioPCMNormalizer {
         bufferList: UnsafePointer<AudioBufferList>,
         streamDescription: AudioStreamBasicDescription
     ) -> [Float]? {
-        var mutableBufferList = bufferList.pointee
+        let buffers = UnsafeMutableAudioBufferListPointer(
+            UnsafeMutablePointer(mutating: bufferList)
+        )
         let monoSamples = readMonoSamples(
-            from: &mutableBufferList,
+            from: buffers,
             streamDescription: streamDescription
         )
         guard !monoSamples.isEmpty else { return [] }
@@ -27,7 +29,7 @@ enum AudioPCMNormalizer {
     }
 
     private static func readMonoSamples(
-        from audioBufferList: inout AudioBufferList,
+        from buffers: UnsafeMutableAudioBufferListPointer,
         streamDescription: AudioStreamBasicDescription
     ) -> [Float] {
         let flags = streamDescription.mFormatFlags
@@ -39,7 +41,7 @@ enum AudioPCMNormalizer {
 
         if isFloat, bitsPerChannel == 32 {
             return readFloat32MonoSamples(
-                from: &audioBufferList,
+                from: buffers,
                 channelCount: channelCount,
                 isNonInterleaved: isNonInterleaved
             )
@@ -47,7 +49,7 @@ enum AudioPCMNormalizer {
 
         if isSignedInteger, bitsPerChannel == 16 {
             return readInt16MonoSamples(
-                from: &audioBufferList,
+                from: buffers,
                 channelCount: channelCount,
                 isNonInterleaved: isNonInterleaved
             )
@@ -58,11 +60,10 @@ enum AudioPCMNormalizer {
     }
 
     private static func readFloat32MonoSamples(
-        from audioBufferList: inout AudioBufferList,
+        from buffers: UnsafeMutableAudioBufferListPointer,
         channelCount: Int,
         isNonInterleaved: Bool
     ) -> [Float] {
-        let buffers = UnsafeMutableAudioBufferListPointer(&audioBufferList)
         guard !buffers.isEmpty else { return [] }
 
         if isNonInterleaved, buffers.count > 1 {
@@ -101,11 +102,10 @@ enum AudioPCMNormalizer {
     }
 
     private static func readInt16MonoSamples(
-        from audioBufferList: inout AudioBufferList,
+        from buffers: UnsafeMutableAudioBufferListPointer,
         channelCount: Int,
         isNonInterleaved: Bool
     ) -> [Float] {
-        let buffers = UnsafeMutableAudioBufferListPointer(&audioBufferList)
         guard !buffers.isEmpty else { return [] }
         let scale = Float(Int16.max)
 
