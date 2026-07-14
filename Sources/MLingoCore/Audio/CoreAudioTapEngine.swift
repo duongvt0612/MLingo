@@ -4,6 +4,10 @@ import Foundation
 public final class CoreAudioTapEngine: AudioEngineProtocol, @unchecked Sendable {
     private let stateQueue = DispatchQueue(label: "com.duongvt.MLingo.core-audio-state")
     private let stateQueueKey = DispatchSpecificKey<Bool>()
+    private let processingQueue = DispatchQueue(
+        label: "com.duongvt.MLingo.core-audio-processing",
+        qos: .userInitiated
+    )
     private let session: CoreAudioTapSession
     private var chunkContinuation: AsyncStream<AudioChunk>.Continuation?
     private var diagnosticsContinuation: AsyncStream<AudioCaptureDiagnostics>.Continuation?
@@ -11,6 +15,7 @@ public final class CoreAudioTapEngine: AudioEngineProtocol, @unchecked Sendable 
     private var diagnosticsAccumulator = AudioCaptureDiagnosticsAccumulator(
         backend: .coreAudioTap
     )
+    private var sampleBatcher = CoreAudioSampleBatcher()
 
     public let chunks: AsyncStream<AudioChunk>
     public let diagnostics: AsyncStream<AudioCaptureDiagnostics>
@@ -42,9 +47,12 @@ public final class CoreAudioTapEngine: AudioEngineProtocol, @unchecked Sendable 
     public func start() async throws {
         MLingoLogger.audio.info("Starting Core Audio system tap")
         resetDiagnostics(state: .requestingPermission)
+        processingQueue.sync {
+            sampleBatcher.reset()
+        }
         do {
             try session.start { [weak self] samples, sampleRate, timestamp in
-                self?.receive(samples: samples, sampleRate: sampleRate, timestamp: timestamp)
+                self?.enqueue(samples: samples, sampleRate: sampleRate, timestamp: timestamp)
             }
             updateDiagnostics(state: .running)
             MLingoLogger.audio.info("Core Audio system tap started")
@@ -60,10 +68,53 @@ public final class CoreAudioTapEngine: AudioEngineProtocol, @unchecked Sendable 
 
     public func stop() async {
         session.stop()
+        processingQueue.sync {
+            sampleBatcher.reset()
+        }
         updateDiagnostics(state: .stopped)
         chunkContinuation?.finish()
         diagnosticsContinuation?.finish()
         MLingoLogger.audio.info("Core Audio system tap stopped")
+    }
+
+    private func enqueue(samples: [Float], sampleRate: Double, timestamp: TimeInterval) {
+        processingQueue.async { [weak self] in
+            self?.processSourceSamples(
+                samples,
+                sampleRate: sampleRate,
+                timestamp: timestamp
+            )
+        }
+    }
+
+    private func processSourceSamples(
+        _ samples: [Float],
+        sampleRate: Double,
+        timestamp: TimeInterval
+    ) {
+        let batches = sampleBatcher.append(
+            samples: samples,
+            sampleRate: sampleRate,
+            timestamp: timestamp
+        )
+        for batch in batches {
+            guard let normalizedSamples = AudioPCMNormalizer.resampleMono(
+                batch.samples,
+                sourceSampleRate: batch.sampleRate
+            ) else {
+                performOnStateQueue {
+                    _ = diagnosticsContinuation?.yield(
+                        diagnosticsAccumulator.recordDroppedChunk()
+                    )
+                }
+                continue
+            }
+            receive(
+                samples: normalizedSamples,
+                sampleRate: AudioPCMNormalizer.targetSampleRate,
+                timestamp: batch.timestamp
+            )
+        }
     }
 
     private func receive(samples: [Float], sampleRate: Double, timestamp: TimeInterval) {

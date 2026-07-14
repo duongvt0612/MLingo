@@ -10,6 +10,22 @@ enum AudioPCMNormalizer {
         bufferList: UnsafePointer<AudioBufferList>,
         streamDescription: AudioStreamBasicDescription
     ) -> [Float]? {
+        guard let monoSamples = downmix(
+            bufferList: bufferList,
+            streamDescription: streamDescription
+        ) else {
+            return nil
+        }
+        return resampleMono(
+            monoSamples,
+            sourceSampleRate: streamDescription.mSampleRate
+        )
+    }
+
+    static func downmix(
+        bufferList: UnsafePointer<AudioBufferList>,
+        streamDescription: AudioStreamBasicDescription
+    ) -> [Float]? {
         let buffers = UnsafeMutableAudioBufferListPointer(
             UnsafeMutablePointer(mutating: bufferList)
         )
@@ -17,13 +33,18 @@ enum AudioPCMNormalizer {
             from: buffers,
             streamDescription: streamDescription
         )
-        guard !monoSamples.isEmpty else { return [] }
-        guard streamDescription.mSampleRate != targetSampleRate else {
-            return monoSamples
-        }
+        return monoSamples
+    }
+
+    static func resampleMono(
+        _ samples: [Float],
+        sourceSampleRate: Double
+    ) -> [Float]? {
+        guard !samples.isEmpty else { return [] }
+        guard sourceSampleRate != targetSampleRate else { return samples }
         return resampleMonoFloat32(
-            monoSamples,
-            sourceSampleRate: streamDescription.mSampleRate,
+            samples,
+            sourceSampleRate: sourceSampleRate,
             targetSampleRate: targetSampleRate
         )
     }

@@ -97,7 +97,7 @@ final class SystemCoreAudioHAL: CoreAudioHALProtocol, @unchecked Sendable {
             ioQueue
         ) { _, inputData, inputTime, _, _ in
             guard
-                let samples = AudioPCMNormalizer.normalize(
+                let samples = AudioPCMNormalizer.downmix(
                     bufferList: inputData,
                     streamDescription: format
                 ),
@@ -110,7 +110,7 @@ final class SystemCoreAudioHAL: CoreAudioHALProtocol, @unchecked Sendable {
                 from: inputTime,
                 sampleRate: format.mSampleRate
             )
-            handler(samples, AudioPCMNormalizer.targetSampleRate, timestamp)
+            handler(samples, format.mSampleRate, timestamp)
         }
         try check(status, operation: .createIOProc)
         guard let ioProcID else {
