@@ -1,5 +1,6 @@
 import Foundation
 import MLingoCore
+import SwiftUI
 import Testing
 @testable import MLingoApp
 
@@ -244,6 +245,37 @@ func translationStartWithInvalidSettingsStaysIdleAndDoesNotCreateAudio() {
     #expect(viewModel.activeMode == .idle)
     #expect(viewModel.lastError?.contains("font size") == true)
     #expect(audioFactory.makeCount == 0)
+}
+
+@Test @MainActor
+func credentialStatusDistinguishesStoredMissingChangedAndFailedStates() async {
+    let keyStore = AppTestAPIKeyStore(storedKey: "sk-stored")
+    let viewModel = makeViewModel(keyStore: keyStore) { _ in AppTestTranslationEngine() }
+
+    #expect(viewModel.credentialStatus(for: "") == .checking)
+    await viewModel.load()
+    #expect(viewModel.credentialStatus(for: "sk-stored") == .saved)
+    #expect(viewModel.credentialStatus(for: "sk-new") == .unsavedChange)
+
+    let emptyViewModel = makeViewModel { _ in AppTestTranslationEngine() }
+    await emptyViewModel.load()
+    #expect(emptyViewModel.credentialStatus(for: "") == .notSaved)
+
+    let failedViewModel = makeViewModel(
+        keyStore: AppTestAPIKeyStore(loadError: AppTestError.credentialFailed)
+    ) { _ in AppTestTranslationEngine() }
+    await failedViewModel.load()
+    guard case .failed = failedViewModel.credentialStatus(for: "") else {
+        Issue.record("Expected failed credential presentation")
+        return
+    }
+}
+
+@Test
+func appThemeMapsToSwiftUIColorScheme() {
+    #expect(AppTheme.system.preferredColorScheme == nil)
+    #expect(AppTheme.light.preferredColorScheme == .light)
+    #expect(AppTheme.dark.preferredColorScheme == .dark)
 }
 
 @Test @MainActor
