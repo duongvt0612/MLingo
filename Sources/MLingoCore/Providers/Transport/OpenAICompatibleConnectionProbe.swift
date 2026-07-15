@@ -22,7 +22,16 @@ public struct OpenAICompatibleModelDiscoveryResult: Sendable, Equatable {
     }
 }
 
-public final class OpenAICompatibleConnectionProbe: @unchecked Sendable {
+public protocol ProviderConnectionProbing: Sendable {
+    func testConnection(
+        profile: ProviderProfile,
+        secretProvider: @Sendable (CredentialID) throws -> String?
+    ) async throws -> ProviderConnectionTestResult
+}
+
+public final class OpenAICompatibleConnectionProbe: ProviderConnectionProbing,
+    @unchecked Sendable
+{
     private let httpClient: HTTPClientProtocol
     private let timeout: TimeInterval
 
