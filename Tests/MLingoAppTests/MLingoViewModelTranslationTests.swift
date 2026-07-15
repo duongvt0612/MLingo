@@ -23,6 +23,22 @@ func openAISettingsValidationReportsEachRequiredDraftField() {
 }
 
 @Test @MainActor
+func openAISettingsValidationIgnoresUnrelatedSettingsErrors() {
+    var settings = AppSettings()
+    settings.whisperModel = ""
+    settings.subtitleFontName = ""
+    settings.subtitleFontSize = 1
+    settings.subtitleBackgroundOpacity = 0
+    settings.subtitleTextOpacity = 2
+
+    let validation = OpenAISettingsValidation(apiKey: "sk-test", settings: settings)
+
+    #expect(validation.isValid)
+    #expect(validation.hasValidTranslationSettings)
+    #expect(validation.firstError == nil)
+}
+
+@Test @MainActor
 func translationTestUsesDraftValuesWithoutPersistingThem() async throws {
     let settingsStore = AppTestSettingsStore()
     let keyStore = AppTestAPIKeyStore()
@@ -150,6 +166,16 @@ func loadCombinesPreferencesAndCredentialErrors() async {
             == "\(settingsError.localizedDescription)\n\(credentialError.localizedDescription)"
     )
     #expect(viewModel.credentialState == .failed(credentialError.localizedDescription))
+}
+
+@Test @MainActor
+func successfulLoadClearsAStaleErrorAfterBothStoresSucceed() async {
+    let viewModel = makeViewModel { _ in AppTestTranslationEngine() }
+    viewModel.lastError = "Stale error"
+
+    await viewModel.load()
+
+    #expect(viewModel.lastError == nil)
 }
 
 @Test @MainActor
