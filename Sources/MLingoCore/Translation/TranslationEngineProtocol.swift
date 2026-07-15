@@ -12,4 +12,19 @@ public struct TranslationRequest: Equatable, Sendable {
 
 public protocol TranslationEngineProtocol: AnyObject, Sendable {
     func translate(_ request: TranslationRequest, settings: AppSettings) async throws -> SubtitleItem
+    func translate(
+        _ request: TranslationRequest,
+        settings: AppSettings,
+        selection: ResolvedProviderSelection?
+    ) async throws -> SubtitleItem
+}
+
+public extension TranslationEngineProtocol {
+    func translate(
+        _ request: TranslationRequest,
+        settings: AppSettings,
+        selection: ResolvedProviderSelection?
+    ) async throws -> SubtitleItem {
+        try await translate(request, settings: settings)
+    }
 }

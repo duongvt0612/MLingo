@@ -28,6 +28,29 @@ public final class OpenAITranslationProviderAdapter: TranslationProvider,
     }
 }
 
+/// Builds a profile-aware OpenAI-compatible translation provider from a registry selection.
+public enum OpenAICompatibleTranslationProviderFactory {
+    public static func make(
+        selection: ResolvedProviderSelection,
+        credentialStore: any ProviderCredentialStoreProtocol,
+        httpClient: HTTPClientProtocol = URLSession.shared
+    ) throws -> any TranslationProvider {
+        guard selection.profile.apiStyle == .responses
+            || selection.profile.apiStyle == .chatCompletions
+        else {
+            throw MLingoError.invalidTranslationConfiguration(
+                "Native provider selections require a native translation provider."
+            )
+        }
+        let engine = OpenAITranslationEngine(
+            profile: selection.profile,
+            secretProvider: { id in try credentialStore.loadCredential(for: id) },
+            httpClient: httpClient
+        )
+        return OpenAITranslationProviderAdapter(engine: engine)
+    }
+}
+
 public final class ProviderTranslationEngine: TranslationEngineProtocol,
     @unchecked Sendable
 {
@@ -50,16 +73,29 @@ public final class ProviderTranslationEngine: TranslationEngineProtocol,
         _ request: TranslationRequest,
         settings: AppSettings
     ) async throws -> SubtitleItem {
-        let configuration = try await profileStore.load()
-        let selection = try ProviderRegistry(
-            profiles: configuration.profiles,
-            selections: configuration.selections
-        ).resolve(.translation)
-        let provider = try providerResolver(selection)
+        try await translate(request, settings: settings, selection: nil)
+    }
+
+    public func translate(
+        _ request: TranslationRequest,
+        settings: AppSettings,
+        selection: ResolvedProviderSelection?
+    ) async throws -> SubtitleItem {
+        let resolvedSelection: ResolvedProviderSelection
+        if let selection {
+            resolvedSelection = selection
+        } else {
+            let configuration = try await profileStore.load()
+            resolvedSelection = try ProviderRegistry(
+                profiles: configuration.profiles,
+                selections: configuration.selections
+            ).resolve(.translation)
+        }
+        let provider = try providerResolver(resolvedSelection)
         return try await provider.translate(
             TranslationProviderRequest(
                 translation: request,
-                model: selection.model,
+                model: resolvedSelection.model,
                 sourceLanguage: settings.sourceLanguage,
                 targetLanguage: settings.targetLanguage
             )
@@ -151,26 +187,22 @@ public actor LegacyOpenAIProviderMigrator: ProviderMigrationProtocol {
         configuration: inout ProviderConfiguration
     ) -> Bool {
         guard !model.isEmpty else { return false }
-        let selection = CapabilitySelection(
+        let openAISelection = CapabilitySelection(
             profileID: ProviderDefaults.openAIProfileID,
             model: model
         )
+        // Never hijack an explicit non-OpenAI capability selection (e.g. Ollama / LM Studio).
+        let currentSelection = configuration.selections[.translation]
+        let ownsTranslationSelection = currentSelection == nil
+            || currentSelection?.profileID == ProviderDefaults.openAIProfileID
 
-        if let index = configuration.profiles.firstIndex(
+        if configuration.profiles.contains(
             where: { $0.id == ProviderDefaults.openAIProfileID }
         ) {
-            var profile = configuration.profiles[index]
-            var changed = false
-            if profile.models[.translation] != [model] {
-                profile.models[.translation] = [model]
-                configuration.profiles[index] = profile
-                changed = true
-            }
-            if configuration.selections[.translation] != selection {
-                configuration.selections[.translation] = selection
-                changed = true
-            }
-            return changed
+            // ProviderConfiguration is canonical after the one-time migration. Re-running
+            // migration during app load/start must never overwrite user-edited models or
+            // capability assignments with the legacy AppSettings.openAIModel value.
+            return false
         }
 
         configuration.profiles.append(
@@ -186,7 +218,9 @@ public actor LegacyOpenAIProviderMigrator: ProviderMigrationProtocol {
                 models: [.translation: [model]]
             )
         )
-        configuration.selections[.translation] = selection
+        if ownsTranslationSelection {
+            configuration.selections[.translation] = openAISelection
+        }
         return true
     }
 }

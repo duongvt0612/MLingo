@@ -53,14 +53,19 @@ struct ContentView: View {
             .accessibilityLabel(viewModel.isTestingSound ? "Stop sound test" : "Test system audio capture")
 
             Button {
-                viewModel.isRunning ? viewModel.stop() : viewModel.start()
+                viewModel.isTranslationSession ? viewModel.stop() : viewModel.start()
             } label: {
-                Label(viewModel.isRunning ? "Stop" : "Start Translate", systemImage: viewModel.isRunning ? "stop.fill" : "play.fill")
-                    .frame(minWidth: 128)
+                Label(
+                    viewModel.isTranslationSession ? "Stop" : "Start Translate",
+                    systemImage: viewModel.isTranslationSession ? "stop.fill" : "play.fill"
+                )
+                .frame(minWidth: 128)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(viewModel.isActive && !viewModel.isRunning)
-            .accessibilityLabel(viewModel.isRunning ? "Stop live translation" : "Start live translation")
+            .disabled(viewModel.isActive && !viewModel.isTranslationSession)
+            .accessibilityLabel(
+                viewModel.isTranslationSession ? "Stop live translation" : "Start live translation"
+            )
         }
         .padding(.top, 14)
         .padding(.leading, 84)
@@ -260,10 +265,41 @@ struct ContentView: View {
                 whisperModelStatusRow
             }
             GridRow {
-                progressRow("OpenAI API key", isReady: !viewModel.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                translationProviderStatusRow
                 progressRow("Subtitle overlay", isReady: true)
             }
         }
+    }
+
+    @ViewBuilder
+    private var translationProviderStatusRow: some View {
+        Group {
+            switch viewModel.translationProviderReadiness {
+            case .checking:
+                Label {
+                    Text("Translation: Checking")
+                } icon: {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            case .ready(let profileName, let model):
+                Label(
+                    "Translation: \(profileName) · \(model)",
+                    systemImage: "checkmark.circle.fill"
+                )
+                .foregroundStyle(.green)
+            case .needsAttention(let message):
+                Label(
+                    "Translation: Needs attention",
+                    systemImage: "exclamationmark.circle.fill"
+                )
+                .foregroundStyle(.orange)
+                .help(message)
+                .accessibilityHint(message)
+            }
+        }
+        .font(.callout)
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -573,6 +609,8 @@ struct ContentView: View {
         switch viewModel.activeMode {
         case .idle:
             "Idle"
+        case .preparingTranslation:
+            "Preparing translation"
         case .soundTest:
             "Sound test"
         case .transcriptionTest:
@@ -586,14 +624,15 @@ struct ContentView: View {
         let capturePermission = viewModel.audioDiagnostics.backend.map {
             "\($0.displayName) uses \($0.permissionDisplayName) permission. "
         } ?? ""
+        let destination = viewModel.translationDestinationDescription
 
         return switch viewModel.activeMode {
         case .soundTest:
-            "\(capturePermission)Testing audio capture only. Whisper and OpenAI are not used in this mode."
+            "\(capturePermission)Testing audio capture only. Whisper and remote translation providers are not used in this mode."
         case .transcriptionTest:
-            "\(capturePermission)Audio and transcription stay on this Mac. OpenAI and the subtitle overlay are not used."
+            "\(capturePermission)Audio and transcription stay on this Mac. Translation providers and the subtitle overlay are not used."
         default:
-            "\(capturePermission)Audio stays local. Only recognized text is sent to OpenAI for translation."
+            "\(capturePermission)Audio stays local. Only recognized text is sent to \(destination) for translation."
         }
     }
 

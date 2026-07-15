@@ -2,8 +2,12 @@
 
 **Design:** [Platform design](../../specs/2026-07-15-mlingo-platform-design.md)
 
-**Status:** Milestones 01-02 complete; Milestone 03 next
-**Execution rule:** Complete and verify one milestone before starting the next.
+**Status:** Milestones 01-02 complete; Milestone 03 implementation complete with its
+loopback live proof deferred by owner waiver; Milestone 04 code-complete with manual
+accessibility acceptance pending.
+**Execution rule:** Complete and verify one milestone before starting the next. The owner
+has explicitly waived the external loopback proof for Milestone 03 until Ollama or LM
+Studio is installed; the unchecked proof is not treated as passed.
 
 ## Locked decisions
 
@@ -53,3 +57,10 @@ Run a native Xcode Release build whenever a dependency, resource, entitlement, s
 
 - 2026-07-15: Milestone 01 complete. Baseline: 175 tests pass, Release build passes with one classified upstream MLXAudioVAD README resource warning, and documentation diff/whitespace checks pass.
 - 2026-07-15: Milestone 02 complete. Capability protocols, explicit provider profiles, no-fallback registry resolution, profile/Keychain stores, OpenAI adapter, and idempotent legacy migration are live. Full suite: 191 tests pass; Release build and diff checks pass.
+- 2026-07-15: Milestone 03 transport core landed (Responses + Chat Completions, presets, auth modes, connection probe). Full suite: 217 tests pass. **Not acceptance-complete** (see later log entries).
+- 2026-07-15: Milestone 03 review fixes. Migration no longer overwrites non-OpenAI selections; none-auth profiles can start without an API key; live suites require `MLINGO_RUN_LIVE_PROVIDER_TESTS=1`; provider error copy is neutral; added cancellation, migration, and local-profile integration coverage. Full suite: 222 tests pass.
+- 2026-07-15: Milestone 03 follow-up. Start resolves the selected profile's CredentialID; `preparingTranslation` is stoppable; quota recovery is OpenAI-only; loopback live gate unchecked; checklist matches HTTPClient fixtures. Full suite: 225 tests pass.
+- 2026-07-15: Milestone 03 still open. Preflight errors no longer leave stale Stop recovery; privacy copy uses resolved destination; transport sanitizes `x-request-id` via redactor; master status corrected to in-progress.
+- 2026-07-16: Milestone 03 implementation is code-complete. The production logging audit and redactor tests confirm request bodies, user text, bearer secrets, custom-header secrets, and unsafe request IDs are not emitted by default. The real loopback integration proof remains unchecked and deferred because neither Ollama nor LM Studio is installed. By explicit owner waiver, Milestone 04 may start without representing that external proof as passed.
+- 2026-07-16: Milestone 04 started. Work is scoped to transactional provider settings, independent capability assignments, native macOS Settings navigation, and accessibility acceptance.
+- 2026-07-16: Milestone 04 implementation is code-complete. Native eight-destination Settings, transactional provider/profile/Keychain persistence, draft connection probing, independent capability assignments, provider-based runtime readiness, deterministic validation/focus routing, and rollback recovery are implemented. The offline suite passes 260 tests; Release build and diff checks pass. Manual VoiceOver, keyboard-only, larger-text, appearance, and reduced-motion acceptance remains unchecked, so Milestone 04 is not yet marked complete.

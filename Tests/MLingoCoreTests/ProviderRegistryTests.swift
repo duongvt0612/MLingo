@@ -130,6 +130,53 @@ func profileValidationRejectsRemoteHTTPAndUnsafeCustomHeaders() {
 }
 
 @Test
+func profileValidationRejectsEmbeddedCredentialsAndQueryFragments() {
+    let withUserInfo = ProviderProfile(
+        name: "Secret in URL",
+        kind: .custom,
+        endpoint: URL(string: "https://user:secret@example.com/v1")!,
+        apiStyle: .chatCompletions,
+        authentication: .none,
+        models: [.translation: ["m"]]
+    )
+    #expect(withUserInfo.validationIssues.contains(.endpointContainsCredentials))
+
+    let withQuery = ProviderProfile(
+        name: "Query key",
+        kind: .custom,
+        endpoint: URL(string: "https://example.com/v1?api-key=sk-leaked")!,
+        apiStyle: .chatCompletions,
+        authentication: .none,
+        models: [.translation: ["m"]]
+    )
+    #expect(withQuery.validationIssues.contains(.endpointContainsQueryOrFragment))
+
+    let withFragment = ProviderProfile(
+        name: "Fragment",
+        kind: .custom,
+        endpoint: URL(string: "https://example.com/v1#token")!,
+        apiStyle: .chatCompletions,
+        authentication: .none,
+        models: [.translation: ["m"]]
+    )
+    #expect(withFragment.validationIssues.contains(.endpointContainsQueryOrFragment))
+}
+
+@Test
+func profileValidationRejectsHTTPSEndpointWithoutHost() {
+    let profile = ProviderProfile(
+        name: "Missing host",
+        kind: .custom,
+        endpoint: URL(string: "https:/v1")!,
+        apiStyle: .responses,
+        authentication: .none,
+        models: [.translation: ["model"]]
+    )
+
+    #expect(profile.validationIssues == [.missingEndpointHost])
+}
+
+@Test
 func encodedProfileReferencesCredentialWithoutContainingASecret() throws {
     let profile = ProviderProfile(
         name: "Custom",

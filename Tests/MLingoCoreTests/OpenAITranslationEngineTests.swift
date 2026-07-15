@@ -63,6 +63,22 @@ func translationEngineBuildsPrivateBoundedContextRequest() async throws {
 }
 
 @Test
+func translationEngineLoadsLegacyAPIKeyOncePerRequest() async throws {
+    let keyStore = CountingAPIKeyStore(apiKey: "sk-once")
+    let client = ScriptedHTTPClient(outcomes: [
+        .response(status: 200, data: responseData("Xin chào")),
+    ])
+    let engine = OpenAITranslationEngine(apiKeyStore: keyStore, httpClient: client)
+
+    _ = try await engine.translate(
+        TranslationRequest(current: Transcript(text: "Hello", timestamp: 0)),
+        settings: AppSettings()
+    )
+
+    #expect(keyStore.loadCount == 1)
+}
+
+@Test
 func translationEngineRejectsInvalidLocalInputBeforeNetwork() async throws {
     let client = ScriptedHTTPClient(outcomes: [])
     let engine = OpenAITranslationEngine(
@@ -140,7 +156,7 @@ func translationEngineRetriesRateLimitOnceAndHonorsCappedRetryAfter() async thro
 
     #expect(item.translated == "Xin chào")
     #expect(client.requests.count == 2)
-    #expect(await delays.values == [1])
+    #expect(await delays.values == [10])
 }
 
 @Test(arguments: [500, 501, 599])
@@ -204,6 +220,33 @@ private final class InMemoryAPIKeyStore: APIKeyStoreProtocol, @unchecked Sendabl
     func deleteAPIKey() throws { apiKey = nil }
 }
 
+private final class CountingAPIKeyStore: APIKeyStoreProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private var apiKey: String?
+    private var loads = 0
+
+    init(apiKey: String?) {
+        self.apiKey = apiKey
+    }
+
+    var loadCount: Int { lock.withLock { loads } }
+
+    func loadAPIKey() throws -> String? {
+        lock.withLock {
+            loads += 1
+            return apiKey
+        }
+    }
+
+    func saveAPIKey(_ apiKey: String) throws {
+        lock.withLock { self.apiKey = apiKey }
+    }
+
+    func deleteAPIKey() throws {
+        lock.withLock { apiKey = nil }
+    }
+}
+
 private enum HTTPOutcome {
     case response(status: Int, data: Data, headers: [String: String] = [:])
     case failure(any Error)
@@ -241,11 +284,4 @@ private final class ScriptedHTTPClient: HTTPClientProtocol, @unchecked Sendable 
 private actor DelayRecorder {
     private(set) var values: [TimeInterval] = []
     func record(_ value: TimeInterval) { values.append(value) }
-}
-
-private extension URLRequest {
-    var jsonBody: [String: Any]? {
-        guard let httpBody else { return nil }
-        return try? JSONSerialization.jsonObject(with: httpBody) as? [String: Any]
-    }
 }

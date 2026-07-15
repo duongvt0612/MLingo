@@ -40,13 +40,35 @@ public enum ProviderAuthentication: Codable, Equatable, Sendable {
     case none
     case bearer(credentialID: CredentialID)
     case customHeader(name: String, credentialID: CredentialID)
+
+    /// Whether a secret must be present in Keychain before transport execution.
+    public var requiresSecret: Bool {
+        credentialID != nil
+    }
+
+    /// Credential reference for bearer / custom-header auth; `nil` for `.none`.
+    public var credentialID: CredentialID? {
+        switch self {
+        case .none:
+            nil
+        case .bearer(let credentialID):
+            credentialID
+        case .customHeader(_, let credentialID):
+            credentialID
+        }
+    }
 }
 
 public enum ProviderProfileValidationIssue: Equatable, Sendable {
     case emptyName
     case missingEndpoint
+    case missingEndpointHost
     case unsupportedEndpointScheme
     case remoteEndpointRequiresHTTPS
+    /// Userinfo (`user:pass@host`) must never be stored; secrets belong in Keychain.
+    case endpointContainsCredentials
+    /// Query/fragment are rejected so secrets cannot hide in `?key=` and path joining stays safe.
+    case endpointContainsQueryOrFragment
     case invalidCustomHeaderName
     case emptyCredentialID
 }
@@ -100,7 +122,17 @@ public struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
             issues.append(.unsupportedEndpointScheme)
             return
         }
-        if scheme == "http", !endpoint.isLoopbackURL {
+        guard let host = endpoint.host, !host.isEmpty else {
+            issues.append(.missingEndpointHost)
+            return
+        }
+        if endpoint.containsEmbeddedCredentials {
+            issues.append(.endpointContainsCredentials)
+        }
+        if endpoint.query != nil || endpoint.fragment != nil {
+            issues.append(.endpointContainsQueryOrFragment)
+        }
+        if scheme == "http", !endpoint.isLoopbackHost {
             issues.append(.remoteEndpointRequiresHTTPS)
         }
     }
@@ -126,13 +158,31 @@ public struct ProviderProfile: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
-private extension URL {
-    var isLoopbackURL: Bool {
+public extension URL {
+    /// True only for OpenAI's official API host.
+    var isOfficialOpenAIAPIEndpoint: Bool {
+        host?.lowercased() == "api.openai.com"
+    }
+
+    /// True when the host is a loopback address (local process only).
+    var isLoopbackHost: Bool {
         guard let host = host?.lowercased() else { return false }
         return host == "localhost"
             || host == "127.0.0.1"
             || host == "::1"
             || host == "[::1]"
+    }
+
+    /// True when the URL embeds userinfo that could carry a secret.
+    var containsEmbeddedCredentials: Bool {
+        if user != nil || password != nil {
+            return true
+        }
+        // Defense in depth: some absolute strings still encode `user:pass@` visibly.
+        guard let components = URLComponents(url: self, resolvingAgainstBaseURL: false) else {
+            return false
+        }
+        return components.user != nil || components.password != nil
     }
 }
 

@@ -27,7 +27,7 @@ struct MLingoApp: App {
 
         Settings {
             SettingsView(viewModel: viewModel)
-                .frame(width: 520, height: 560)
+                .frame(minWidth: 860, minHeight: 600)
                 .preferredColorScheme(viewModel.settings.theme.preferredColorScheme)
         }
     }

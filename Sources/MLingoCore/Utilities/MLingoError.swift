@@ -37,7 +37,7 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
     public var errorDescription: String? {
         switch self {
         case .missingAPIKey:
-            "Add an OpenAI Platform API key in Settings before starting translation."
+            "Add a provider API key in Settings before starting translation."
         case .permissionDenied(let message):
             message
         case .systemAudioPermissionDenied:
@@ -55,19 +55,19 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
         case .whisperInferenceFailed(let message):
             message
         case .invalidAPIKey:
-            "The OpenAI API key is invalid. Update it in Settings and start a new translation session."
+            "The provider API key is invalid. Update it in Settings and start a new translation session."
         case .invalidOpenAIModel:
-            "The selected OpenAI model is unavailable. Check the model name in Settings."
+            "The selected translation model is unavailable. Check the model name in Settings."
         case .quotaExceeded:
-            "The OpenAI account has no available quota. Check billing and usage before trying again."
+            "The provider account has no available quota. Check billing and usage before trying again."
         case .rateLimited:
-            "OpenAI is temporarily rate limiting requests. Try again shortly."
+            "The translation provider is temporarily rate limiting requests. Try again shortly."
         case .networkOffline:
             "MLingo is offline. Check the network connection before restarting translation."
         case .requestTimedOut:
-            "The OpenAI translation request timed out."
+            "The translation request timed out."
         case .translationServiceUnavailable:
-            "OpenAI translation is temporarily unavailable."
+            "Translation is temporarily unavailable."
         case .translationInputTooLong(let maxCharacters):
             "The transcript is too long to translate safely (maximum \(maxCharacters) characters)."
         case .invalidTranslationConfiguration(let message):
@@ -75,7 +75,7 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
         case .invalidSettings(let message):
             message
         case .credentialStoreFailure:
-            "MLingo couldn't access the OpenAI API key in Keychain. Check app permissions and try again."
+            "MLingo couldn't access the provider credential in Keychain. Check app permissions and try again."
         case .translationRequestRejected(let message):
             message
         case .translationFailed(let message):
