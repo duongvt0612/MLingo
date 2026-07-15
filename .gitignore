@@ -75,3 +75,6 @@ logs/
 tmp/
 temp/
 *.tmp
+.gitnexus
+AGENTS.md
+CLAUDE.md

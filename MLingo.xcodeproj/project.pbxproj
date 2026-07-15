@@ -16,6 +16,10 @@
 		A00100000000000000000007 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000007 /* SettingsView.swift */; };
 		A00100000000000000000008 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B00100000000000000000008 /* Assets.xcassets */; };
 		A00100000000000000000009 /* MLingoCore in Frameworks */ = {isa = PBXBuildFile; productRef = J00100000000000000000001 /* MLingoCore */; };
+		A0010000000000000000000A /* SettingsEditorModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000C /* SettingsEditorModels.swift */; };
+		A0010000000000000000000B /* SettingsEditorViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000D /* SettingsEditorViewModel.swift */; };
+		A0010000000000000000000C /* SettingsPersistenceCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000E /* SettingsPersistenceCoordinator.swift */; };
+		A0010000000000000000000D /* ProviderSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0010000000000000000000F /* ProviderSettingsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,6 +34,10 @@
 		B00100000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = Sources/MLingoApp/Resources/Info.plist; sourceTree = SOURCE_ROOT; };
 		B0010000000000000000000A /* MLingo.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = MLingo.entitlements; path = Sources/MLingoApp/Resources/MLingo.entitlements; sourceTree = SOURCE_ROOT; };
 		B0010000000000000000000B /* MLingo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MLingo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B0010000000000000000000C /* SettingsEditorModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SettingsEditorModels.swift; path = Sources/MLingoApp/App/SettingsEditorModels.swift; sourceTree = SOURCE_ROOT; };
+		B0010000000000000000000D /* SettingsEditorViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SettingsEditorViewModel.swift; path = Sources/MLingoApp/App/SettingsEditorViewModel.swift; sourceTree = SOURCE_ROOT; };
+		B0010000000000000000000E /* SettingsPersistenceCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SettingsPersistenceCoordinator.swift; path = Sources/MLingoApp/App/SettingsPersistenceCoordinator.swift; sourceTree = SOURCE_ROOT; };
+		B0010000000000000000000F /* ProviderSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProviderSettingsView.swift; path = Sources/MLingoApp/Views/ProviderSettingsView.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -61,8 +69,12 @@
 				B00100000000000000000003 /* SettingsPresentation.swift */,
 				B00100000000000000000004 /* AppIssuePresentation.swift */,
 				B00100000000000000000005 /* MLingoCommands.swift */,
+				B0010000000000000000000C /* SettingsEditorModels.swift */,
+				B0010000000000000000000D /* SettingsEditorViewModel.swift */,
+				B0010000000000000000000E /* SettingsPersistenceCoordinator.swift */,
 				B00100000000000000000006 /* ContentView.swift */,
 				B00100000000000000000007 /* SettingsView.swift */,
+				B0010000000000000000000F /* ProviderSettingsView.swift */,
 			);
 			name = Application;
 			sourceTree = "<group>";
@@ -165,8 +177,12 @@
 				A00100000000000000000003 /* SettingsPresentation.swift in Sources */,
 				A00100000000000000000004 /* AppIssuePresentation.swift in Sources */,
 				A00100000000000000000005 /* MLingoCommands.swift in Sources */,
+				A0010000000000000000000A /* SettingsEditorModels.swift in Sources */,
+				A0010000000000000000000B /* SettingsEditorViewModel.swift in Sources */,
+				A0010000000000000000000C /* SettingsPersistenceCoordinator.swift in Sources */,
 				A00100000000000000000006 /* ContentView.swift in Sources */,
 				A00100000000000000000007 /* SettingsView.swift in Sources */,
+				A0010000000000000000000D /* ProviderSettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -6,6 +6,31 @@ remains unchecked.
 
 **Outcome:** Users can safely configure profiles and independent capability selections in a native, accessible Settings experience.
 
+## Audit matrix recorded 2026-07-16
+
+Checkboxes were not treated as evidence. `Verified` means the current implementation,
+regression coverage, and any required native UI evidence agree. `Gap` means acceptance
+evidence is still missing; it does not imply a product defect unless one is named.
+
+| Requirement | Status | Current evidence |
+|---|---|---|
+| Eight locked Settings destinations | Verified | `SettingsDestination.allCases` regression plus the native accessibility tree show General, Audio & Speech, AI Providers, Models, Translation, Subtitles, Appearance, and Privacy in order. |
+| Draft isolation, Cancel, normalization, deterministic validation, legacy-model exclusion, unavailable-selection recovery, and invalid-focus routing | Verified | `SettingsEditorDomainTests.swift` covers the snapshot/draft boundary, normalized profiles/models, `AppSettings.openAIModel` exclusion, explicit clearing, and first-invalid-field routing before persistence. |
+| Transactional persistence and rollback | Verified | `SettingsPersistenceCoordinatorTests.swift` covers credential -> provider configuration -> app settings writes, failures at every stage, reverse rollback, rollback-failure reload, and no-write invalid drafts. |
+| Credential lifecycle and secret containment | Verified | Shared and unreferenced credentials, active-session mutation protection, empty replacement rejection, Keychain account usage, secret-free serialized settings/configuration, and probe-closure-only secret reads are covered offline. |
+| Unsaved connection probe | Verified | `SettingsConnectionProbeTests.swift` covers unsaved endpoint/models/replacement secret, unchanged-secret closure reads, cancellation, discovered-model non-persistence, and stale callback rejection. |
+| Independent capability assignments and no fallback | Verified | Native accessibility output shows independent Translation, Chat, Embedding, and Text to Speech provider controls with valid `Not configured` states; registry/editor tests enforce explicit selection without fallback. |
+| Native provider/settings UX | Verified | Native Release QA shows the master-detail profile editor, grouped scrollable forms, semantic Light/Dark rendering, endpoint/API style/authentication/model controls, Test Connection, Delete, Cancel, and Save. |
+| Xcode application target contains all M04 sources | Verified | The audit first reproduced a native Release archive compile failure because four M04 files were absent from `MLingo.xcodeproj`; target membership is fixed and `XcodeProjectMembershipTests.swift` prevents recurrence. |
+| Keyboard-only and invalid-focus manual acceptance | Gap | Return/Escape wiring and focus routing are automated. A full native traversal still requires macOS Keyboard Navigation to be enabled and has not been recorded. |
+| VoiceOver manual acceptance | Gap | Accessibility labels/order are visible in the native accessibility tree, but an actual VoiceOver reading-order pass has not been recorded. |
+| Largest supported text size | Gap | Scroll containers are verified in code/native tree; the largest macOS text-size run has not been recorded. |
+| System, Light, and Dark appearance | Gap | Dark and Light are legible in the QA build, and Cancel/reopen plus Light Save/reopen were exercised. Dark Save/reopen and a complete focus-ring sweep are still missing. |
+| Reduced Motion | Gap | No custom animations/transitions were found, but the native flow has not been repeated with Reduce Motion enabled. |
+| Profile/credential transaction smoke | Gap | Automated rollback/secret masking passes and appearance Cancel/Save/reopen passes. A native profile plus fake-credential Cancel/Save/reopen run is still missing. |
+
+No requirement is currently classified `Not applicable`.
+
 ## Tasks
 
 - [x] Add view-model tests for sidebar routing, draft editing, Save/Cancel rollback, validation, connection-test state, and secret replacement/removal.
@@ -40,9 +65,13 @@ remains unchecked.
 - [x] Settings uses native system fonts, semantic styles, SF Symbols, scrollable grouped
   forms, a minimum window size, Return as the default Save action, Escape for Cancel, and
   text plus symbols for every status. There are no custom animations or transitions.
-- [x] Offline deterministic gate: `rtk swift test --no-parallel` passes 260 tests;
+- [x] Xcode target membership is checked against every Swift source under
+  `Sources/MLingoApp`; the four missing M04 source entries found by the audit are fixed.
+- [x] Offline deterministic gate: `rtk swift test --no-parallel` passes 268 tests;
   `rtk swift build -c release` and `rtk git diff --check` pass. The only build warning is
   the already-classified upstream MLXAudioVAD README resource warning.
+- [x] Native application gate: `./scripts/build-local-rc.sh` archives the Release app,
+  copies the artifact, and verifies its ad-hoc signature after the Xcode membership fix.
 
 ## Manual accessibility checklist
 
@@ -63,3 +92,17 @@ complete. Do not infer a pass from automated tests.
   save flows; no nonessential motion may appear.
 - [ ] Transaction smoke test: edit a profile and credential then Cancel/reopen to confirm
   no persisted change; repeat with Save and confirm the secret remains masked.
+
+### Partial native run recorded 2026-07-16
+
+- Native accessibility inspection confirmed the sidebar order, destination labels,
+  independent capability controls, profile editor labels/hints, credential state, and
+  scrollable provider form.
+- Appearance Cancel/reopen preserved the snapshot. Light Save/reopen persisted, and the
+  QA profile was restored to System afterward. Light and Dark semantic rendering were
+  visually legible at the default text size.
+- Tab reached Cancel and Save, but the machine's macOS Keyboard Navigation setting was
+  not enabled, so this is not accepted as a keyboard-only pass.
+- VoiceOver, largest text, Reduce Motion, Dark Save/reopen, and the fake-credential
+  transaction smoke remain unaccepted. Milestone 04 therefore remains code-complete,
+  not acceptance-complete.
