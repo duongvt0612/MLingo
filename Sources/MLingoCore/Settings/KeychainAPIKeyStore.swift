@@ -103,12 +103,22 @@ public final class KeychainAPIKeyStore: APIKeyStoreProtocol, @unchecked Sendable
         switch client.read(service: service, account: account) {
         case .found:
             let status = client.update(data, service: service, account: account)
-            guard status == errSecSuccess else {
+            if status == errSecItemNotFound {
+                let fallbackStatus = client.add(data, service: service, account: account)
+                guard fallbackStatus == errSecSuccess else {
+                    throw failure(operation: .add, status: fallbackStatus)
+                }
+            } else if status != errSecSuccess {
                 throw failure(operation: .update, status: status)
             }
         case .notFound:
             let status = client.add(data, service: service, account: account)
-            guard status == errSecSuccess else {
+            if status == errSecDuplicateItem {
+                let fallbackStatus = client.update(data, service: service, account: account)
+                guard fallbackStatus == errSecSuccess else {
+                    throw failure(operation: .update, status: fallbackStatus)
+                }
+            } else if status != errSecSuccess {
                 throw failure(operation: .add, status: status)
             }
         case .failure(let status):

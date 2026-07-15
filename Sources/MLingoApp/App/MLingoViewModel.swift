@@ -131,11 +131,13 @@ final class MLingoViewModel {
     }
 
     func load() async {
+        var settingsLoadError: String?
         do {
             settings = try await settingsStore.load()
             whisperDiagnostics.modelID = settings.whisperModel
         } catch {
-            lastError = error.localizedDescription
+            settingsLoadError = error.localizedDescription
+            lastError = settingsLoadError
         }
 
         do {
@@ -144,9 +146,14 @@ final class MLingoViewModel {
             apiKey = loadedAPIKey
             credentialState = loadedAPIKey.isEmpty ? .notStored : .stored
         } catch {
+            let credentialError = error.localizedDescription
             apiKey = ""
-            credentialState = .failed(error.localizedDescription)
-            lastError = error.localizedDescription
+            credentialState = .failed(credentialError)
+            if let settingsLoadError {
+                lastError = "\(settingsLoadError)\n\(credentialError)"
+            } else {
+                lastError = credentialError
+            }
         }
     }
 
@@ -185,7 +192,7 @@ final class MLingoViewModel {
                 try persistAPIKey(trimmedAPIKey)
             }
         } catch {
-            credentialState = .failed(error.localizedDescription)
+            credentialState = previousCredentialState
             lastError = error.localizedDescription
             return false
         }
