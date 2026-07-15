@@ -19,8 +19,8 @@
   **Not yet proven in CI/default runs.** Live Ollama/LM Studio tests only execute when
   `MLINGO_RUN_LIVE_PROVIDER_TESTS=1` **and** the corresponding base URL is set. Mark this
   when those tests have been run successfully against a real loopback server.
-- [ ] Logs and diagnostics redact bearer/custom secrets and user text by default.
-  **Partial:** production transport sanitizes server-controlled `x-request-id` and never logs
-  request bodies/secrets; unit coverage exists for `ProviderDiagnosticRedactor`. Full default
-  redaction of arbitrary diagnostic surfaces remains incomplete until broader logging audit.
+- [x] Logs and diagnostics redact bearer/custom secrets and user text by default.
+  Production transport never logs request bodies, credentials, or user text; server-controlled
+  `x-request-id` values are sanitized before logging. The production logging audit and
+  `ProviderDiagnosticRedactor` coverage were accepted on 2026-07-16.
 - [x] No network call occurs in the default suite.

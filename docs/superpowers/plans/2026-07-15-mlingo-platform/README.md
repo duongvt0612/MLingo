@@ -2,8 +2,11 @@
 
 **Design:** [Platform design](../../specs/2026-07-15-mlingo-platform-design.md)
 
-**Status:** Milestones 01-02 complete; Milestone 03 in progress (remaining: loopback live proof, full diagnostic redaction acceptance)
-**Execution rule:** Complete and verify one milestone before starting the next.
+**Status:** Milestones 01-02 complete; Milestone 03 implementation complete with its
+loopback live proof deferred by owner waiver; Milestone 04 in progress.
+**Execution rule:** Complete and verify one milestone before starting the next. The owner
+has explicitly waived the external loopback proof for Milestone 03 until Ollama or LM
+Studio is installed; the unchecked proof is not treated as passed.
 
 ## Locked decisions
 
@@ -57,3 +60,5 @@ Run a native Xcode Release build whenever a dependency, resource, entitlement, s
 - 2026-07-15: Milestone 03 review fixes. Migration no longer overwrites non-OpenAI selections; none-auth profiles can start without an API key; live suites require `MLINGO_RUN_LIVE_PROVIDER_TESTS=1`; provider error copy is neutral; added cancellation, migration, and local-profile integration coverage. Full suite: 222 tests pass.
 - 2026-07-15: Milestone 03 follow-up. Start resolves the selected profile's CredentialID; `preparingTranslation` is stoppable; quota recovery is OpenAI-only; loopback live gate unchecked; checklist matches HTTPClient fixtures. Full suite: 225 tests pass.
 - 2026-07-15: Milestone 03 still open. Preflight errors no longer leave stale Stop recovery; privacy copy uses resolved destination; transport sanitizes `x-request-id` via redactor; master status corrected to in-progress.
+- 2026-07-16: Milestone 03 implementation is code-complete. The production logging audit and redactor tests confirm request bodies, user text, bearer secrets, custom-header secrets, and unsafe request IDs are not emitted by default. The real loopback integration proof remains unchecked and deferred because neither Ollama nor LM Studio is installed. By explicit owner waiver, Milestone 04 may start without representing that external proof as passed.
+- 2026-07-16: Milestone 04 started. Work is scoped to transactional provider settings, independent capability assignments, native macOS Settings navigation, and accessibility acceptance.

@@ -1,5 +1,8 @@
 # Milestone 04: Provider Settings UX
 
+**Status:** In progress as of 2026-07-16. Milestone 03's external loopback proof is
+deferred by explicit owner waiver and remains unchecked.
+
 **Outcome:** Users can safely configure profiles and independent capability selections in a native, accessible Settings experience.
 
 ## Tasks
