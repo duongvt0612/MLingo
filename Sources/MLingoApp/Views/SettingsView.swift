@@ -308,7 +308,7 @@ struct SettingsView: View {
         let shouldShow = field.map {
             touchedFields.contains($0)
                 || didAttemptSettingsValidation
-                || didAttemptTranslationTest
+                || (didAttemptTranslationTest && isTranslationTestField($0))
         } ?? true
         if shouldShow, let message {
             Label(message, systemImage: "exclamationmark.circle")
@@ -373,9 +373,13 @@ struct SettingsView: View {
     private func focusFirstTranslationError() {
         if openAIValidation.apiKeyError != nil {
             focusedField = .apiKey
-        } else {
-            focusFirstSettingsError()
+        } else if openAIValidation.modelError != nil {
+            focusedField = .openAIModel
         }
+    }
+
+    private func isTranslationTestField(_ field: AppSettingsField) -> Bool {
+        field == .openAIModel
     }
 
     @ViewBuilder

@@ -1,6 +1,7 @@
 import Foundation
 import MLingoCore
 import Observation
+import OSLog
 
 @MainActor
 @Observable
@@ -145,6 +146,9 @@ final class MLingoViewModel {
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             apiKey = loadedAPIKey
             credentialState = loadedAPIKey.isEmpty ? .notStored : .stored
+            if settingsLoadError == nil {
+                lastError = nil
+            }
         } catch {
             let credentialError = error.localizedDescription
             apiKey = ""
@@ -205,11 +209,22 @@ final class MLingoViewModel {
                     try persistAPIKey(previousAPIKey)
                     credentialState = previousCredentialState
                 } catch {
-                    MLingoLogger.settings.error("Credential rollback failed; operation=rollback")
+                    let rollbackStatus: Int32
+                    if let credentialError = error as? MLingoError,
+                       case .credentialStoreFailure(_, let status) = credentialError
+                    {
+                        rollbackStatus = status
+                    } else {
+                        rollbackStatus = -1
+                    }
+                    let rollbackError = error.localizedDescription
+                    MLingoLogger.settings.error(
+                        "Credential rollback failed; operation=rollback status=\(rollbackStatus) error=\(rollbackError, privacy: .public)"
+                    )
                     credentialState = .failed(
                         MLingoError.credentialStoreFailure(
                             operation: .rollback,
-                            status: -1
+                            status: rollbackStatus
                         ).localizedDescription
                     )
                 }
@@ -525,7 +540,6 @@ struct OpenAISettingsValidation: Equatable {
     let sourceLanguageError: String?
     let targetLanguageError: String?
     let normalizedSettings: AppSettings
-    private let settingsFirstError: String?
 
     init(apiKey: String, settings: AppSettings) {
         let validation = AppSettingsValidation(settings: settings)
@@ -536,7 +550,6 @@ struct OpenAISettingsValidation: Equatable {
         sourceLanguageError = validation.errors[.sourceLanguage]
         targetLanguageError = validation.errors[.targetLanguage]
         normalizedSettings = validation.normalizedSettings
-        settingsFirstError = validation.firstError
     }
 
     var isValid: Bool {
@@ -544,11 +557,16 @@ struct OpenAISettingsValidation: Equatable {
     }
 
     var hasValidTranslationSettings: Bool {
-        settingsFirstError == nil
+        modelError == nil
+            && sourceLanguageError == nil
+            && targetLanguageError == nil
     }
 
     var firstError: String? {
-        apiKeyError ?? settingsFirstError
+        apiKeyError
+            ?? modelError
+            ?? sourceLanguageError
+            ?? targetLanguageError
     }
 }
 
