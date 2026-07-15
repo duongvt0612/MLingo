@@ -21,6 +21,9 @@ struct MLingoApp: App {
                 .preferredColorScheme(viewModel.settings.theme.preferredColorScheme)
         }
         .windowStyle(.hiddenTitleBar)
+        .commands {
+            MLingoCommands(viewModel: viewModel)
+        }
 
         Settings {
             SettingsView(viewModel: viewModel)

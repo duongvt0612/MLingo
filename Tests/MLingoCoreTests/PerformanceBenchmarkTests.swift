@@ -143,7 +143,7 @@ struct PerformanceBenchmarkTests {
         )
         let started = await pipeline.start(
             mode: .transcriptionOnly,
-            onError: { message in print("Stability pipeline error: \(message)") },
+            onError: { error in print("Stability pipeline error: \(error.localizedDescription)") },
             onPerformanceDiagnostics: { await recorder.append($0) }
         )
         guard started else {

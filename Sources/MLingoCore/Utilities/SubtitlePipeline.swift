@@ -7,6 +7,7 @@ public enum SubtitlePipelineMode: Equatable, Sendable {
 
 @MainActor
 public final class SubtitlePipeline {
+    public typealias ErrorHandler = @MainActor @Sendable (MLingoError) -> Void
     public typealias TranscriptHandler = @Sendable (Transcript) async -> Void
     public typealias WhisperDiagnosticsHandler = @Sendable (WhisperDiagnostics) async -> Void
     public typealias PerformanceDiagnosticsHandler = @Sendable (
@@ -86,7 +87,7 @@ public final class SubtitlePipeline {
     @discardableResult
     public func start(
         mode: SubtitlePipelineMode = .translation,
-        onError: @escaping @Sendable (String) -> Void,
+        onError: @escaping ErrorHandler,
         onWarning: @escaping @Sendable (String) -> Void = { _ in },
         onAudioDiagnostics: (@Sendable (AudioCaptureDiagnostics) async -> Void)? = nil,
         onTranscript: @escaping TranscriptHandler = { _ in },
@@ -104,8 +105,10 @@ public final class SubtitlePipeline {
         performanceHandler = onPerformanceDiagnostics
         await onPerformanceDiagnostics(PipelinePerformanceDiagnostics())
 
+        var startStage = StartStage.settings
         do {
             let settings = try await settingsStore.load()
+            startStage = .whisper
             try await transcriptionCoordinator.start(
                 modelID: settings.whisperModel,
                 language: settings.sourceLanguage,
@@ -125,7 +128,7 @@ public final class SubtitlePipeline {
                 },
                 onError: { [weak self] message in
                     await self?.reportError(
-                        message,
+                        .whisperInferenceFailed(message),
                         sessionID: newSessionID,
                         handler: onError
                     )
@@ -148,6 +151,7 @@ public final class SubtitlePipeline {
                 preferredBackend: settings.audioCaptureBackend
             )
             activeAudioEngine = audioEngine
+            startStage = .audio
             try await audioEngine.start()
             guard sessionID == newSessionID else {
                 await audioEngine.stop()
@@ -208,7 +212,7 @@ public final class SubtitlePipeline {
             MLingoLogger.pipeline.error(
                 "Subtitle pipeline failed to start: \(error.localizedDescription, privacy: .public)"
             )
-            onError(error.localizedDescription)
+            onError(Self.startError(error, stage: startStage))
             await stop()
             return false
         }
@@ -286,7 +290,7 @@ public final class SubtitlePipeline {
         settings: AppSettings,
         sessionID expectedSessionID: UUID,
         onTranscript: TranscriptHandler,
-        onError: @escaping @Sendable (String) -> Void,
+        onError: @escaping ErrorHandler,
         onWarning: @escaping @Sendable (String) -> Void
     ) async {
         guard sessionID == expectedSessionID else { return }
@@ -312,7 +316,7 @@ public final class SubtitlePipeline {
         _ transcript: Transcript,
         settings: AppSettings,
         sessionID expectedSessionID: UUID,
-        onError: @escaping @Sendable (String) -> Void,
+        onError: @escaping ErrorHandler,
         onWarning: @escaping @Sendable (String) -> Void
     ) {
         guard sessionID == expectedSessionID, !translationPaused else { return }
@@ -372,7 +376,7 @@ public final class SubtitlePipeline {
     private func drainTranslations(
         settings: AppSettings,
         sessionID expectedSessionID: UUID,
-        onError: @escaping @Sendable (String) -> Void
+        onError: @escaping ErrorHandler
     ) async {
         defer {
             if sessionID == expectedSessionID {
@@ -462,7 +466,10 @@ public final class SubtitlePipeline {
                 )
                 performanceTracker?.discardTrace(transcriptID: request.current.id)
                 guard sessionID == expectedSessionID, !Task.isCancelled else { return }
-                onError(error.localizedDescription)
+                onError(
+                    (error as? MLingoError)
+                        ?? .translationFailed(error.localizedDescription)
+                )
 
                 if let mlingoError = error as? MLingoError,
                    mlingoError.pausesTranslationSession
@@ -482,12 +489,25 @@ public final class SubtitlePipeline {
     }
 
     private func reportError(
-        _ message: String,
+        _ error: MLingoError,
         sessionID expectedSessionID: UUID,
-        handler: @escaping @Sendable (String) -> Void
+        handler: @escaping ErrorHandler
     ) {
         guard sessionID == expectedSessionID else { return }
-        handler(message)
+        handler(error)
+    }
+
+    private static func startError(_ error: any Error, stage: StartStage) -> MLingoError {
+        if let error = error as? MLingoError { return error }
+
+        return switch stage {
+        case .settings:
+            .invalidSettings(error.localizedDescription)
+        case .whisper:
+            .whisperModelLoadFailed(error.localizedDescription)
+        case .audio:
+            .captureFailed(error.localizedDescription)
+        }
     }
 
     private func isCurrentSession(_ expectedSessionID: UUID) -> Bool {
@@ -522,4 +542,10 @@ public final class SubtitlePipeline {
         if error is URLError { return "network" }
         return "other"
     }
+}
+
+private enum StartStage {
+    case settings
+    case whisper
+    case audio
 }

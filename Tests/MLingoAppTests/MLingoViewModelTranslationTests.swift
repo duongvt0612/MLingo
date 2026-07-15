@@ -292,7 +292,58 @@ func translationStartWithoutAPIKeyStaysIdleAndDoesNotCreateAudio() {
 
     #expect(viewModel.activeMode == .idle)
     #expect(viewModel.lastError == MLingoError.missingAPIKey.localizedDescription)
+    #expect(viewModel.errorRecoveryActions == [.openSettings])
     #expect(audioFactory.makeCount == 0)
+}
+
+@Test
+func appIssuePresentationMapsTypedErrorsToContextualRecovery() {
+    #expect(
+        AppIssuePresentation(
+            error: .systemAudioPermissionDenied,
+            isTranslationActive: false
+        ).actions == [.openSystemSettings]
+    )
+    #expect(
+        AppIssuePresentation(
+            error: .quotaExceeded,
+            isTranslationActive: true
+        ).actions == [.openOpenAIUsage, .stopTranslation]
+    )
+    #expect(
+        AppIssuePresentation(
+            error: .noAudioSource,
+            isTranslationActive: false
+        ).actions == [.openSystemSettings]
+    )
+    #expect(
+        AppIssuePresentation(
+            error: .networkOffline,
+            isTranslationActive: true
+        ).actions == [.dismiss, .stopTranslation]
+    )
+    #expect(
+        AppIssuePresentation(
+            error: .requestTimedOut,
+            isTranslationActive: true
+        ).actions == [.dismiss]
+    )
+}
+
+@Test @MainActor
+func appCommandAvailabilityTracksActiveModeAndOverlayState() {
+    let viewModel = makeViewModel { _ in AppTestTranslationEngine() }
+
+    #expect(viewModel.commandAvailability.canStartTranslation)
+    #expect(!viewModel.commandAvailability.canStop)
+    #expect(!viewModel.commandAvailability.canToggleOverlay)
+
+    viewModel.apiKey = "sk-test"
+    viewModel.start()
+
+    #expect(!viewModel.commandAvailability.canStartTranslation)
+    #expect(viewModel.commandAvailability.canStop)
+    #expect(viewModel.commandAvailability.canToggleOverlay)
 }
 
 @Test @MainActor

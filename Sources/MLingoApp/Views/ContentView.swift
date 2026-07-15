@@ -1,10 +1,11 @@
+import AppKit
 import MLingoCore
 import SwiftUI
 
 struct ContentView: View {
     @Bindable var viewModel: MLingoViewModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openSettings) private var openSettings
+    @State private var diagnosticsExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -58,7 +59,6 @@ struct ContentView: View {
                     .frame(minWidth: 128)
             }
             .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.return, modifiers: [.command])
             .disabled(viewModel.isActive && !viewModel.isRunning)
             .accessibilityLabel(viewModel.isRunning ? "Stop live translation" : "Start live translation")
         }
@@ -150,9 +150,16 @@ struct ContentView: View {
     private var statusPanel: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack(alignment: .center, spacing: 12) {
-                Label(viewModel.status, systemImage: statusIconName)
+                HStack(spacing: 9) {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 10, height: 10)
+                        .accessibilityHidden(true)
+                    Text(viewModel.status)
+                }
                     .font(.title3.weight(.semibold))
-                    .symbolEffect(.pulse, options: reduceMotion ? .nonRepeating : .repeating, value: viewModel.isActive)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Status: \(viewModel.status)")
 
                 Spacer()
 
@@ -165,13 +172,7 @@ struct ContentView: View {
             }
 
             if let lastError = viewModel.lastError {
-                Text(lastError)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-                    .accessibilityLabel("Error: \(lastError)")
+                errorBanner(lastError)
             } else if let lastWarning = viewModel.lastWarning {
                 Label(lastWarning, systemImage: "exclamationmark.triangle")
                     .font(.callout)
@@ -188,19 +189,68 @@ struct ContentView: View {
 
             readinessGrid
 
-            audioDiagnosticsPanel
-
-            Divider()
-
-            transcriptionDiagnosticsPanel
-
-            Divider()
-
-            performanceDiagnosticsPanel
+            DisclosureGroup(isExpanded: $diagnosticsExpanded) {
+                VStack(alignment: .leading, spacing: 18) {
+                    audioDiagnosticsPanel
+                    Divider()
+                    transcriptionDiagnosticsPanel
+                    Divider()
+                    performanceDiagnosticsPanel
+                }
+                .padding(.top, 14)
+            } label: {
+                Label("Diagnostics", systemImage: "stethoscope")
+                    .font(.headline)
+            }
+            .accessibilityLabel("Audio, transcription, and performance diagnostics")
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .font(.callout)
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !viewModel.errorRecoveryActions.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(viewModel.errorRecoveryActions, id: \.self) { action in
+                        Button(action.label) {
+                            performRecovery(action)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Error: \(message)")
+    }
+
+    private func performRecovery(_ action: AppRecoveryAction) {
+        switch action {
+        case .openSettings:
+            openSettings()
+        case .openSystemSettings:
+            NSWorkspace.shared.open(
+                URL(fileURLWithPath: "/System/Applications/System Settings.app")
+            )
+        case .openOpenAIUsage:
+            guard let url = URL(string: "https://platform.openai.com/usage") else { return }
+            NSWorkspace.shared.open(url)
+        case .stopTranslation:
+            viewModel.stop()
+        case .dismiss:
+            viewModel.dismissError()
+        }
     }
 
     private var readinessGrid: some View {
@@ -509,14 +559,14 @@ struct ContentView: View {
         viewModel.audioDiagnostics.state == .running
     }
 
-    private var statusIconName: String {
-        if viewModel.isActive {
-            return "waveform"
-        }
+    private var statusColor: Color {
         if viewModel.lastError != nil {
-            return "exclamationmark.triangle"
+            return .red
         }
-        return "checkmark.circle"
+        if viewModel.isActive {
+            return .green
+        }
+        return .secondary
     }
 
     private var modeLabel: String {
