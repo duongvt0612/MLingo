@@ -2,7 +2,7 @@
 
 **Design:** [Platform design](../../specs/2026-07-15-mlingo-platform-design.md)
 
-**Status:** Milestone 01 complete; Milestone 02 next
+**Status:** Milestones 01-02 complete; Milestone 03 next
 **Execution rule:** Complete and verify one milestone before starting the next.
 
 ## Locked decisions
@@ -52,3 +52,4 @@ Run a native Xcode Release build whenever a dependency, resource, entitlement, s
 ## Status log
 
 - 2026-07-15: Milestone 01 complete. Baseline: 175 tests pass, Release build passes with one classified upstream MLXAudioVAD README resource warning, and documentation diff/whitespace checks pass.
+- 2026-07-15: Milestone 02 complete. Capability protocols, explicit provider profiles, no-fallback registry resolution, profile/Keychain stores, OpenAI adapter, and idempotent legacy migration are live. Full suite: 191 tests pass; Release build and diff checks pass.
