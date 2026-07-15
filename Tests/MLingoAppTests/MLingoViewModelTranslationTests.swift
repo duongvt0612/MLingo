@@ -242,7 +242,7 @@ func translationStartWithInvalidSettingsStaysIdleAndDoesNotCreateAudio() {
     viewModel.start()
 
     #expect(viewModel.activeMode == .idle)
-    #expect(viewModel.lastError?.contains("Font size") == true)
+    #expect(viewModel.lastError?.contains("font size") == true)
     #expect(audioFactory.makeCount == 0)
 }
 
