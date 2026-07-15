@@ -132,6 +132,27 @@ func credentialStillLoadsWhenPreferencesFail() async {
 }
 
 @Test @MainActor
+func loadCombinesPreferencesAndCredentialErrors() async {
+    let settingsError = MLingoError.invalidSettings("Preferences could not be loaded.")
+    let credentialError = MLingoError.credentialStoreFailure(
+        operation: .load,
+        status: -50
+    )
+    let viewModel = makeViewModel(
+        settingsStore: AppTestSettingsStore(loadError: settingsError),
+        keyStore: AppTestAPIKeyStore(loadError: credentialError)
+    ) { _ in AppTestTranslationEngine() }
+
+    await viewModel.load()
+
+    #expect(
+        viewModel.lastError
+            == "\(settingsError.localizedDescription)\n\(credentialError.localizedDescription)"
+    )
+    #expect(viewModel.credentialState == .failed(credentialError.localizedDescription))
+}
+
+@Test @MainActor
 func savingAnUnchangedAPIKeyDoesNotWriteKeychain() async {
     let keyStore = AppTestAPIKeyStore(storedKey: "sk-same")
     let viewModel = makeViewModel(keyStore: keyStore) { _ in AppTestTranslationEngine() }
@@ -158,6 +179,23 @@ func savingAnEmptyAPIKeyDeletesTheStoredCredential() async {
     #expect(keyStore.currentKey == nil)
     #expect(viewModel.apiKey.isEmpty)
     #expect(viewModel.credentialState == .notStored)
+}
+
+@Test @MainActor
+func credentialWriteFailurePreservesPreviousCredentialState() async {
+    let keyStore = AppTestAPIKeyStore(
+        storedKey: "sk-old",
+        saveFailureCallNumbers: [1]
+    )
+    let viewModel = makeViewModel(keyStore: keyStore) { _ in AppTestTranslationEngine() }
+    await viewModel.load()
+
+    let saved = await viewModel.save(AppSettings(), apiKey: "sk-new")
+
+    #expect(!saved)
+    #expect(viewModel.apiKey == "sk-old")
+    #expect(viewModel.credentialState == .stored)
+    #expect(viewModel.lastError != nil)
 }
 
 @Test @MainActor

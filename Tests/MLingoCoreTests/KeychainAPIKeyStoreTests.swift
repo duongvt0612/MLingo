@@ -66,6 +66,83 @@ func keychainStoreUpdatesExistingItemAndAddsMissingItem() throws {
 }
 
 @Test
+func keychainStoreRecoversWhenAddRacesWithAnotherWriter() throws {
+    let client = TestKeychainItemClient(
+        readResult: .notFound,
+        addStatus: errSecDuplicateItem
+    )
+    let store = KeychainAPIKeyStore(
+        service: "test-service",
+        account: "test-account",
+        client: client
+    )
+
+    try store.saveAPIKey("secret")
+
+    #expect(client.addedValues == [Data("secret".utf8)])
+    #expect(client.updatedValues == [Data("secret".utf8)])
+}
+
+@Test
+func keychainStoreRecoversWhenUpdateRacesWithDeletion() throws {
+    let client = TestKeychainItemClient(
+        readResult: .found(Data("old".utf8)),
+        updateStatus: errSecItemNotFound
+    )
+    let store = KeychainAPIKeyStore(
+        service: "test-service",
+        account: "test-account",
+        client: client
+    )
+
+    try store.saveAPIKey("secret")
+
+    #expect(client.updatedValues == [Data("secret".utf8)])
+    #expect(client.addedValues == [Data("secret".utf8)])
+}
+
+@Test
+func keychainStoreMapsRaceFallbackFailuresToTheFallbackOperation() {
+    let updateClient = TestKeychainItemClient(
+        readResult: .notFound,
+        addStatus: errSecDuplicateItem,
+        updateStatus: errSecAuthFailed
+    )
+    let updateStore = KeychainAPIKeyStore(
+        service: "test-service",
+        account: "test-account",
+        client: updateClient
+    )
+    #expect(
+        throws: MLingoError.credentialStoreFailure(
+            operation: .update,
+            status: errSecAuthFailed
+        )
+    ) {
+        try updateStore.saveAPIKey("secret")
+    }
+
+    let addClient = TestKeychainItemClient(
+        readResult: .found(Data("old".utf8)),
+        addStatus: errSecAuthFailed,
+        updateStatus: errSecItemNotFound
+    )
+    let addStore = KeychainAPIKeyStore(
+        service: "test-service",
+        account: "test-account",
+        client: addClient
+    )
+    #expect(
+        throws: MLingoError.credentialStoreFailure(
+            operation: .add,
+            status: errSecAuthFailed
+        )
+    ) {
+        try addStore.saveAPIKey("secret")
+    }
+}
+
+@Test
 func keychainStoreDoesNotAddAfterLookupFailure() {
     let client = TestKeychainItemClient(readResult: .failure(errSecInteractionNotAllowed))
     let store = KeychainAPIKeyStore(
