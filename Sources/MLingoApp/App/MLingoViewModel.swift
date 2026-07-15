@@ -50,6 +50,7 @@ final class MLingoViewModel {
     private(set) var transcriptionEntries: [TranscriptLogEntry] = []
     var audioDiagnostics = AudioCaptureDiagnostics()
     var whisperDiagnostics = WhisperDiagnostics()
+    var performanceDiagnostics = PipelinePerformanceDiagnostics()
 
     var isRunning: Bool { activeMode == .translation }
     var isTestingSound: Bool { activeMode == .soundTest }
@@ -410,6 +411,7 @@ final class MLingoViewModel {
         lastError = nil
         lastWarning = nil
         transcriptionEntries = []
+        performanceDiagnostics = PipelinePerformanceDiagnostics()
         whisperDiagnostics = WhisperDiagnostics(
             modelState: .loading,
             modelID: settings.whisperModel
@@ -461,6 +463,12 @@ final class MLingoViewModel {
                             self?.status = "Loading Whisper model"
                         }
                     }
+                },
+                onPerformanceDiagnostics: { [weak self, sessionID] diagnostics in
+                    await MainActor.run {
+                        guard self?.activeSessionID == sessionID else { return }
+                        self?.performanceDiagnostics = diagnostics
+                    }
                 }
             )
             guard isCurrentSession(sessionID, mode: viewMode) else { return }
@@ -480,8 +488,7 @@ final class MLingoViewModel {
 
     private func finishActiveMode(statusAfterStop: String?) async {
         let mode = activeMode
-        activeSessionID = UUID()
-        activeMode = .idle
+        let finishingSessionID = activeSessionID
         let pendingStartTask = startTask
         startTask = nil
         pendingStartTask?.cancel()
@@ -494,6 +501,10 @@ final class MLingoViewModel {
         } else if mode == .translation || mode == .transcriptionTest {
             await pipeline.stop()
         }
+
+        guard activeSessionID == finishingSessionID else { return }
+        activeSessionID = UUID()
+        activeMode = .idle
 
         if let statusAfterStop {
             status = statusAfterStop

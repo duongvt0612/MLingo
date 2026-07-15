@@ -3,6 +3,91 @@ import Testing
 @testable import MLingoCore
 
 @Test
+func adaptiveWindowPreservesLatestSpeechCaptureAnchor() throws {
+    let configuration = AdaptiveAudioWindowConfiguration(
+        minimumSpeechDuration: 0.2,
+        preferredWindowDuration: 1,
+        maximumWindowDuration: 1,
+        silenceFlushDelay: 0.1,
+        overlapDuration: 0.2,
+        minimumQuietBoundaryDuration: 0.1
+    )
+    var accumulator = AdaptiveAudioWindowAccumulator(configuration: configuration)
+    let firstInstant = ContinuousClock.now
+    let secondInstant = firstInstant.advanced(by: .milliseconds(500))
+
+    #expect(
+        accumulator.appendTraced(
+            chunk(duration: 0.5, timestamp: 0, isSpeechLike: true),
+            capturedAt: firstInstant
+        ).isEmpty
+    )
+    let windows = accumulator.appendTraced(
+        chunk(duration: 0.5, timestamp: 0.5, isSpeechLike: true),
+        capturedAt: secondInstant
+    )
+
+    let window = try #require(windows.first)
+    #expect(window.speechEnd == secondInstant)
+}
+
+@Test
+func silenceFlushKeepsLastSpeechAnchorInsteadOfSilenceArrival() throws {
+    let configuration = AdaptiveAudioWindowConfiguration(
+        minimumSpeechDuration: 0.2,
+        preferredWindowDuration: 2,
+        maximumWindowDuration: 3,
+        silenceFlushDelay: 0.1,
+        overlapDuration: 0.2,
+        minimumQuietBoundaryDuration: 0.1
+    )
+    var accumulator = AdaptiveAudioWindowAccumulator(configuration: configuration)
+    let speechInstant = ContinuousClock.now
+    let silenceInstant = speechInstant.advanced(by: .seconds(1))
+
+    _ = accumulator.appendTraced(
+        chunk(duration: 0.5, timestamp: 0, isSpeechLike: true),
+        capturedAt: speechInstant
+    )
+    _ = accumulator.appendTraced(
+        chunk(duration: 0.2, timestamp: 0.5, isSpeechLike: false),
+        capturedAt: silenceInstant
+    )
+
+    let flushedWindow = accumulator.flushForSilenceTraced()
+    let window = try #require(flushedWindow)
+    #expect(window.speechEnd == speechInstant)
+}
+
+@Test
+func timestampDiscontinuityDiscardsPreviousCaptureAnchor() throws {
+    let configuration = AdaptiveAudioWindowConfiguration(
+        minimumSpeechDuration: 0.2,
+        preferredWindowDuration: 1,
+        maximumWindowDuration: 2,
+        silenceFlushDelay: 0.1,
+        overlapDuration: 0.2,
+        minimumQuietBoundaryDuration: 0.1
+    )
+    var accumulator = AdaptiveAudioWindowAccumulator(configuration: configuration)
+    let staleInstant = ContinuousClock.now
+    let newInstant = staleInstant.advanced(by: .seconds(2))
+
+    _ = accumulator.appendTraced(
+        chunk(duration: 0.5, timestamp: 0, isSpeechLike: true),
+        capturedAt: staleInstant
+    )
+    _ = accumulator.appendTraced(
+        chunk(duration: 0.5, timestamp: 10, isSpeechLike: true),
+        capturedAt: newInstant
+    )
+
+    let flushedWindow = accumulator.flushForSilenceTraced()
+    let window = try #require(flushedWindow)
+    #expect(window.speechEnd == newInstant)
+}
+
+@Test
 func adaptiveWindowFlushesShortSpeechAfterSilence() throws {
     var accumulator = AdaptiveAudioWindowAccumulator()
 
