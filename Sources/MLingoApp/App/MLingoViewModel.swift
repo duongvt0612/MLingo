@@ -1,6 +1,7 @@
 import Foundation
 import MLingoCore
 import Observation
+import OSLog
 
 @MainActor
 @Observable
@@ -30,12 +31,21 @@ final class MLingoViewModel {
         case translation
     }
 
+    enum CredentialState: Equatable {
+        case unknown
+        case notStored
+        case stored
+        case failed(String)
+    }
+
     var settings: AppSettings
     var apiKey: String = ""
     private(set) var activeMode: ActiveMode = .idle
     var status = "Ready"
     var lastError: String?
     var lastWarning: String?
+    private(set) var credentialState: CredentialState = .unknown
+    private(set) var isSavingSettings = false
     private(set) var translationTestState: TranslationTestState = .idle
     private(set) var transcriptionEntries: [TranscriptLogEntry] = []
     var audioDiagnostics = AudioCaptureDiagnostics()
@@ -48,6 +58,22 @@ final class MLingoViewModel {
     var isTranslationTestRunning: Bool { translationTestState == .running }
     var overlayPresentationState: OverlayPresentationState {
         pipeline.overlayPresentationState
+    }
+
+    func credentialStatus(for candidateAPIKey: String) -> CredentialStatus {
+        let candidate = candidateAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard candidate == apiKey else { return .unsavedChange }
+
+        switch credentialState {
+        case .unknown:
+            return .checking
+        case .notStored:
+            return .notSaved
+        case .stored:
+            return .saved
+        case .failed(let message):
+            return .failed(message)
+        }
     }
 
     private let settingsStore: SettingsStoreProtocol
@@ -106,12 +132,32 @@ final class MLingoViewModel {
     }
 
     func load() async {
+        var settingsLoadError: String?
         do {
             settings = try await settingsStore.load()
-            apiKey = try apiKeyStore.loadAPIKey() ?? ""
             whisperDiagnostics.modelID = settings.whisperModel
         } catch {
-            lastError = error.localizedDescription
+            settingsLoadError = error.localizedDescription
+            lastError = settingsLoadError
+        }
+
+        do {
+            let loadedAPIKey = try apiKeyStore.loadAPIKey()?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            apiKey = loadedAPIKey
+            credentialState = loadedAPIKey.isEmpty ? .notStored : .stored
+            if settingsLoadError == nil {
+                lastError = nil
+            }
+        } catch {
+            let credentialError = error.localizedDescription
+            apiKey = ""
+            credentialState = .failed(credentialError)
+            if let settingsLoadError {
+                lastError = "\(settingsLoadError)\n\(credentialError)"
+            } else {
+                lastError = credentialError
+            }
         }
     }
 
@@ -126,27 +172,77 @@ final class MLingoViewModel {
         apiKey candidateAPIKey: String? = nil,
         overlayDisplaySelection: OverlayDisplaySelection? = nil
     ) async -> Bool {
+        guard !isSavingSettings else { return false }
+        isSavingSettings = true
+        defer { isSavingSettings = false }
+
+        let validation = AppSettingsValidation(settings: candidateSettings)
+        guard validation.isValid else {
+            lastError = MLingoError.invalidSettings(
+                validation.firstError ?? "Review Settings before saving."
+            ).localizedDescription
+            return false
+        }
+
+        let normalizedSettings = validation.normalizedSettings
+        let trimmedAPIKey = (candidateAPIKey ?? apiKey)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let previousAPIKey = apiKey
+        let previousCredentialState = credentialState
+        let credentialChanged = trimmedAPIKey != previousAPIKey
+
         do {
-            let trimmedAPIKey = (candidateAPIKey ?? apiKey)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmedAPIKey.isEmpty {
-                try apiKeyStore.deleteAPIKey()
-            } else {
-                try apiKeyStore.saveAPIKey(trimmedAPIKey)
+            if credentialChanged {
+                try persistAPIKey(trimmedAPIKey)
             }
-            try await settingsStore.save(candidateSettings)
-            if let overlayDisplaySelection {
-                pipeline.selectOverlayDisplay(overlayDisplaySelection)
-            }
-            apiKey = trimmedAPIKey
-            settings = candidateSettings
-            status = "Settings saved"
-            lastError = nil
-            return true
         } catch {
+            credentialState = previousCredentialState
             lastError = error.localizedDescription
             return false
         }
+
+        do {
+            try await settingsStore.save(normalizedSettings)
+        } catch {
+            if credentialChanged {
+                do {
+                    try persistAPIKey(previousAPIKey)
+                    credentialState = previousCredentialState
+                } catch {
+                    let rollbackStatus: Int32
+                    if let credentialError = error as? MLingoError,
+                       case .credentialStoreFailure(_, let status) = credentialError
+                    {
+                        rollbackStatus = status
+                    } else {
+                        rollbackStatus = -1
+                    }
+                    let rollbackError = error.localizedDescription
+                    MLingoLogger.settings.error(
+                        "Credential rollback failed; operation=rollback status=\(rollbackStatus) error=\(rollbackError, privacy: .public)"
+                    )
+                    credentialState = .failed(
+                        MLingoError.credentialStoreFailure(
+                            operation: .rollback,
+                            status: rollbackStatus
+                        ).localizedDescription
+                    )
+                }
+            }
+            lastError = error.localizedDescription
+            return false
+        }
+
+        if let overlayDisplaySelection {
+            pipeline.selectOverlayDisplay(overlayDisplaySelection)
+        }
+        apiKey = trimmedAPIKey
+        credentialState = trimmedAPIKey.isEmpty ? .notStored : .stored
+        settings = normalizedSettings
+        whisperDiagnostics.modelID = normalizedSettings.whisperModel
+        status = "Settings saved"
+        lastError = nil
+        return true
     }
 
     func testTranslation(apiKey candidateAPIKey: String, settings candidateSettings: AppSettings) async {
@@ -165,7 +261,8 @@ final class MLingoViewModel {
         }
 
         let trimmedAPIKey = candidateAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let model = candidateSettings.openAIModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedSettings = validation.normalizedSettings
+        let model = normalizedSettings.openAIModel
         translationTestState = .running
         let start = ContinuousClock.now
 
@@ -175,7 +272,7 @@ final class MLingoViewModel {
                 TranslationRequest(
                     current: Transcript(text: Self.translationTestFixture, timestamp: 0)
                 ),
-                settings: candidateSettings
+                settings: normalizedSettings
             )
             try Task.checkCancellation()
             translationTestState = .success(
@@ -199,6 +296,19 @@ final class MLingoViewModel {
     }
 
     func start() {
+        let validation = AppSettingsValidation(settings: settings)
+        guard validation.isValid else {
+            lastError = MLingoError.invalidSettings(
+                validation.firstError ?? "Review Settings before starting translation."
+            ).localizedDescription
+            status = "Settings need attention"
+            return
+        }
+        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            lastError = MLingoError.missingAPIKey.localizedDescription
+            status = "Settings need attention"
+            return
+        }
         startPipeline(mode: .translation)
     }
 
@@ -414,6 +524,14 @@ final class MLingoViewModel {
     private func isCurrentSession(_ sessionID: UUID, mode: ActiveMode) -> Bool {
         activeSessionID == sessionID && activeMode == mode && !Task.isCancelled
     }
+
+    private func persistAPIKey(_ value: String) throws {
+        if value.isEmpty {
+            try apiKeyStore.deleteAPIKey()
+        } else {
+            try apiKeyStore.saveAPIKey(value)
+        }
+    }
 }
 
 struct OpenAISettingsValidation: Equatable {
@@ -421,20 +539,17 @@ struct OpenAISettingsValidation: Equatable {
     let modelError: String?
     let sourceLanguageError: String?
     let targetLanguageError: String?
+    let normalizedSettings: AppSettings
 
     init(apiKey: String, settings: AppSettings) {
+        let validation = AppSettingsValidation(settings: settings)
         apiKeyError = apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "Enter an OpenAI Platform API key."
             : nil
-        modelError = settings.openAIModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "Enter an OpenAI model."
-            : nil
-        sourceLanguageError = settings.sourceLanguage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "Enter a source language."
-            : nil
-        targetLanguageError = settings.targetLanguage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "Enter a target language."
-            : nil
+        modelError = validation.errors[.openAIModel]
+        sourceLanguageError = validation.errors[.sourceLanguage]
+        targetLanguageError = validation.errors[.targetLanguage]
+        normalizedSettings = validation.normalizedSettings
     }
 
     var isValid: Bool {
@@ -442,11 +557,16 @@ struct OpenAISettingsValidation: Equatable {
     }
 
     var hasValidTranslationSettings: Bool {
-        modelError == nil && sourceLanguageError == nil && targetLanguageError == nil
+        modelError == nil
+            && sourceLanguageError == nil
+            && targetLanguageError == nil
     }
 
     var firstError: String? {
-        apiKeyError ?? modelError ?? sourceLanguageError ?? targetLanguageError
+        apiKeyError
+            ?? modelError
+            ?? sourceLanguageError
+            ?? targetLanguageError
     }
 }
 

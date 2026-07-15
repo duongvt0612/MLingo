@@ -61,25 +61,89 @@ public struct AppSettings: Codable, Equatable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        audioCaptureBackend = try container.decodeIfPresent(
+        let defaults = AppSettings()
+
+        func decode<T: Decodable>(
+            _ type: T.Type,
+            forKey key: CodingKeys,
+            default defaultValue: T
+        ) -> T {
+            do {
+                return try container.decodeIfPresent(type, forKey: key) ?? defaultValue
+            } catch {
+                return defaultValue
+            }
+        }
+
+        func repairedString(forKey key: CodingKeys, default defaultValue: String) -> String {
+            let value = decode(String.self, forKey: key, default: defaultValue)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? defaultValue : value
+        }
+
+        func clamped(
+            _ value: Double,
+            to range: ClosedRange<Double>,
+            default defaultValue: Double
+        ) -> Double {
+            guard value.isFinite else { return defaultValue }
+            return min(max(value, range.lowerBound), range.upperBound)
+        }
+
+        audioCaptureBackend = decode(
             AudioCaptureBackend.self,
-            forKey: .audioCaptureBackend
-        ) ?? .coreAudioTap
-        whisperModel = try container.decode(String.self, forKey: .whisperModel)
-        openAIModel = try container.decode(String.self, forKey: .openAIModel)
-        subtitleFontName = try container.decode(String.self, forKey: .subtitleFontName)
-        subtitleFontSize = try container.decode(Double.self, forKey: .subtitleFontSize)
-        subtitleBackgroundOpacity = try container.decode(
-            Double.self,
-            forKey: .subtitleBackgroundOpacity
+            forKey: .audioCaptureBackend,
+            default: defaults.audioCaptureBackend
         )
-        subtitleTextOpacity = try container.decode(Double.self, forKey: .subtitleTextOpacity)
-        theme = try container.decode(AppTheme.self, forKey: .theme)
-        sourceLanguage = try container.decode(String.self, forKey: .sourceLanguage)
-        targetLanguage = try container.decode(String.self, forKey: .targetLanguage)
-        showBilingualSubtitles = try container.decode(
+        whisperModel = repairedString(
+            forKey: .whisperModel,
+            default: defaults.whisperModel
+        )
+        openAIModel = repairedString(forKey: .openAIModel, default: defaults.openAIModel)
+        subtitleFontName = repairedString(
+            forKey: .subtitleFontName,
+            default: defaults.subtitleFontName
+        )
+        subtitleFontSize = clamped(
+            decode(
+                Double.self,
+                forKey: .subtitleFontSize,
+                default: defaults.subtitleFontSize
+            ),
+            to: 18...64,
+            default: defaults.subtitleFontSize
+        )
+        subtitleBackgroundOpacity = clamped(
+            decode(
+                Double.self,
+                forKey: .subtitleBackgroundOpacity,
+                default: defaults.subtitleBackgroundOpacity
+            ),
+            to: 0.2...0.9,
+            default: defaults.subtitleBackgroundOpacity
+        )
+        subtitleTextOpacity = clamped(
+            decode(
+                Double.self,
+                forKey: .subtitleTextOpacity,
+                default: defaults.subtitleTextOpacity
+            ),
+            to: 0...1,
+            default: defaults.subtitleTextOpacity
+        )
+        theme = decode(AppTheme.self, forKey: .theme, default: defaults.theme)
+        sourceLanguage = repairedString(
+            forKey: .sourceLanguage,
+            default: defaults.sourceLanguage
+        )
+        targetLanguage = repairedString(
+            forKey: .targetLanguage,
+            default: defaults.targetLanguage
+        )
+        showBilingualSubtitles = decode(
             Bool.self,
-            forKey: .showBilingualSubtitles
+            forKey: .showBilingualSubtitles,
+            default: defaults.showBilingualSubtitles
         )
     }
 }

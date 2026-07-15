@@ -69,7 +69,9 @@ Networking
 
 Persistence
 
-- SwiftData
+- UserDefaults for small application preferences
+- Keychain for the OpenAI API key
+- SwiftData is reserved for future history or vocabulary data
 
 Logging
 
@@ -134,6 +136,8 @@ Features
 ---
 
 ## Settings
+
+Settings use a Save/Cancel draft flow. Saving validates and normalizes the draft before changing the running app. The OpenAI API key is stored separately in Keychain and is never serialized with preferences.
 
 Allow configuring
 

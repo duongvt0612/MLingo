@@ -18,12 +18,14 @@ struct MLingoApp: App {
         WindowGroup {
             ContentView(viewModel: viewModel)
                 .frame(minWidth: 760, minHeight: 520)
+                .preferredColorScheme(viewModel.settings.theme.preferredColorScheme)
         }
         .windowStyle(.hiddenTitleBar)
 
         Settings {
             SettingsView(viewModel: viewModel)
                 .frame(width: 520, height: 560)
+                .preferredColorScheme(viewModel.settings.theme.preferredColorScheme)
         }
     }
 }
