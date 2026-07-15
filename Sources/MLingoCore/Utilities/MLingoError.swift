@@ -1,5 +1,14 @@
 import Foundation
 
+public enum CredentialStoreOperation: String, Equatable, Sendable {
+    case load
+    case inspect
+    case add
+    case update
+    case delete
+    case rollback
+}
+
 public enum MLingoError: LocalizedError, Equatable, Sendable {
     case missingAPIKey
     case permissionDenied(String)
@@ -20,6 +29,7 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
     case translationInputTooLong(maxCharacters: Int)
     case invalidTranslationConfiguration(String)
     case invalidSettings(String)
+    case credentialStoreFailure(operation: CredentialStoreOperation, status: Int32)
     case translationRequestRejected(String)
     case translationFailed(String)
     case invalidResponse
@@ -64,6 +74,8 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
             message
         case .invalidSettings(let message):
             message
+        case .credentialStoreFailure:
+            "MLingo couldn't access the OpenAI API key in Keychain. Check app permissions and try again."
         case .translationRequestRejected(let message):
             message
         case .translationFailed(let message):
