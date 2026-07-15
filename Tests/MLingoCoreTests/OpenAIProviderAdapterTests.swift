@@ -104,6 +104,97 @@ func legacyOpenAIMigrationMovesCredentialAndModelThenDeletesLegacyKey() async th
 }
 
 @Test
+func legacyOpenAIMigrationPreservesNonOpenAITranslationSelection() async throws {
+    let ollamaID = UUID()
+    let ollama = OpenAICompatiblePresets.make(
+        kind: .ollama,
+        name: "Local Ollama",
+        id: ollamaID,
+        models: [.translation: ["llama3.2"]]
+    )
+    let openAI = ProviderProfile(
+        id: ProviderDefaults.openAIProfileID,
+        name: "OpenAI",
+        kind: .openAI,
+        endpoint: URL(string: "https://api.openai.com/v1")!,
+        apiStyle: .responses,
+        authentication: .bearer(credentialID: ProviderDefaults.openAICredentialID),
+        models: [.translation: ["gpt-old"]]
+    )
+    let profileStore = AdapterProfileStore(configuration: ProviderConfiguration(
+        profiles: [openAI, ollama],
+        selections: [
+            .translation: CapabilitySelection(profileID: ollamaID, model: "llama3.2"),
+        ]
+    ))
+    let credentials = AdapterCredentialStore()
+    let legacy = AdapterLegacyAPIKeyStore(key: nil)
+    let migrator = LegacyOpenAIProviderMigrator(
+        profileStore: profileStore,
+        credentialStore: credentials,
+        legacyAPIKeyStore: legacy
+    )
+
+    try await migrator.migrate(settings: AppSettings(openAIModel: "gpt-new"))
+    try await migrator.migrate(settings: AppSettings(openAIModel: "gpt-newer"))
+
+    let configuration = try await profileStore.load()
+    let selection = try #require(configuration.selections[.translation])
+    let migratedOpenAI = try #require(
+        configuration.profiles.first { $0.id == ProviderDefaults.openAIProfileID }
+    )
+    #expect(selection.profileID == ollamaID)
+    #expect(selection.model == "llama3.2")
+    #expect(migratedOpenAI.models[.translation] == ["gpt-newer"])
+    #expect(await profileStore.saveCount == 2)
+}
+
+@Test
+func selectedLocalProfileRoutesTranslationThroughChatCompletionsWithoutAuth() async throws {
+    let client = ScriptedTransportHTTPClient(outcomes: [
+        .response(status: 200, data: TransportFixtures.chatCompletionsSuccess(), headers: [:]),
+    ])
+    let ollamaID = UUID()
+    let ollama = OpenAICompatiblePresets.make(
+        kind: .ollama,
+        id: ollamaID,
+        models: [.translation: ["llama3.2"]]
+    )
+    let store = AdapterProfileStore(configuration: ProviderConfiguration(
+        profiles: [ollama],
+        selections: [
+            .translation: CapabilitySelection(profileID: ollamaID, model: "llama3.2"),
+        ]
+    ))
+    let credentials = AdapterCredentialStore()
+    let engine = ProviderTranslationEngine(
+        profileStore: store,
+        providerResolver: { selection in
+            OpenAICompatibleTranslationProviderFactory.make(
+                selection: selection,
+                credentialStore: credentials,
+                httpClient: client
+            )
+        }
+    )
+
+    let item = try await engine.translate(
+        TranslationRequest(current: Transcript(text: "Hello", timestamp: 2)),
+        settings: AppSettings(
+            openAIModel: "ignored-legacy-model",
+            sourceLanguage: "English",
+            targetLanguage: "Vietnamese"
+        )
+    )
+
+    let request = try #require(client.requests.last)
+    #expect(item.translated == TransportFixtures.translated)
+    #expect(request.url?.absoluteString == "http://127.0.0.1:11434/v1/chat/completions")
+    #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+    #expect(request.jsonBody?["model"] as? String == "llama3.2")
+}
+
+@Test
 func legacyOpenAIMigrationRollsBackNewCredentialWhenProfileSaveFails() async {
     let profileStore = AdapterProfileStore(saveError: AdapterTestError.saveFailed)
     let credentials = AdapterCredentialStore()

@@ -314,6 +314,296 @@ func translationStartWithoutAPIKeyStaysIdleAndDoesNotCreateAudio() {
     #expect(audioFactory.makeCount == 0)
 }
 
+@Test @MainActor
+func translationStartWithNoneAuthProfileDoesNotRequireAPIKey() async throws {
+    let audioFactory = AppTestAudioFactory()
+    let ollamaID = UUID()
+    let ollama = OpenAICompatiblePresets.make(
+        kind: .ollama,
+        id: ollamaID,
+        models: [.translation: ["llama3.2"]]
+    )
+    let profileStore = AppTestProfileStore(configuration: ProviderConfiguration(
+        profiles: [ollama],
+        selections: [
+            .translation: CapabilitySelection(profileID: ollamaID, model: "llama3.2"),
+        ]
+    ))
+    let viewModel = makeViewModel(
+        audioFactory: audioFactory,
+        profileStore: profileStore
+    ) { _ in
+        AppTestTranslationEngine()
+    }
+    viewModel.apiKey = ""
+
+    viewModel.start()
+    try await appEventually { viewModel.status == "Listening" }
+    #expect(viewModel.activeMode == .translation)
+    #expect(viewModel.lastError == nil)
+    #expect(audioFactory.makeCount == 1)
+
+    viewModel.stop()
+    try await appEventually { viewModel.activeMode == .idle }
+}
+
+@Test @MainActor
+func translationStartUsesSelectedProfileCredentialNotOpenAIDefault() async throws {
+    let audioFactory = AppTestAudioFactory()
+    let customID = UUID()
+    let customCredential = CredentialID("custom-provider-secret")
+    let custom = ProviderProfile(
+        id: customID,
+        name: "Custom Bearer",
+        kind: .custom,
+        endpoint: URL(string: "https://api.example.com/v1")!,
+        apiStyle: .chatCompletions,
+        authentication: .bearer(credentialID: customCredential),
+        models: [.translation: ["custom-model"]]
+    )
+    let profileStore = AppTestProfileStore(configuration: ProviderConfiguration(
+        profiles: [custom],
+        selections: [
+            .translation: CapabilitySelection(profileID: customID, model: "custom-model"),
+        ]
+    ))
+    let credentials = AppTestCredentialStore()
+    try credentials.saveCredential("sk-custom-only", for: customCredential)
+    let keyStore = AppTestAPIKeyStore(storedKey: nil) // OpenAI default empty
+    let viewModel = makeViewModel(
+        keyStore: keyStore,
+        audioFactory: audioFactory,
+        profileStore: profileStore,
+        credentialStore: credentials
+    ) { _ in AppTestTranslationEngine() }
+    viewModel.apiKey = ""
+
+    viewModel.start()
+    try await appEventually { viewModel.status == "Listening" }
+    #expect(viewModel.activeMode == .translation)
+    #expect(viewModel.lastError == nil)
+    #expect(audioFactory.makeCount == 1)
+
+    viewModel.stop()
+    try await appEventually { viewModel.activeMode == .idle }
+}
+
+@Test @MainActor
+func translationSessionKeepsPreflightProviderSelectionWhenConfigurationChanges() async throws {
+    let firstID = UUID()
+    let secondID = UUID()
+    let first = ProviderProfile(
+        id: firstID,
+        name: "First provider",
+        kind: .custom,
+        endpoint: URL(string: "https://first.example/v1")!,
+        apiStyle: .chatCompletions,
+        authentication: .none,
+        models: [.translation: ["first-model"]]
+    )
+    let second = ProviderProfile(
+        id: secondID,
+        name: "Second provider",
+        kind: .custom,
+        endpoint: URL(string: "https://second.example/v1")!,
+        apiStyle: .chatCompletions,
+        authentication: .none,
+        models: [.translation: ["second-model"]]
+    )
+    let firstConfiguration = ProviderConfiguration(
+        profiles: [first],
+        selections: [
+            .translation: CapabilitySelection(profileID: firstID, model: "first-model"),
+        ]
+    )
+    let secondConfiguration = ProviderConfiguration(
+        profiles: [second],
+        selections: [
+            .translation: CapabilitySelection(profileID: secondID, model: "second-model"),
+        ]
+    )
+    let profileStore = AppTestProfileStore(
+        configuration: firstConfiguration,
+        subsequentConfiguration: secondConfiguration
+    )
+    let provider = AppRecordingTranslationProvider()
+    let selectionRecorder = AppResolvedSelectionRecorder(provider: provider)
+    let translationEngine = ProviderTranslationEngine(
+        profileStore: profileStore,
+        providerResolver: { selection in selectionRecorder.resolve(selection) }
+    )
+    let audioFactory = AppTestAudioFactory()
+    let viewModel = makeViewModel(
+        audioFactory: audioFactory,
+        profileStore: profileStore,
+        pipelineTranslationEngine: translationEngine,
+        whisperEngine: AppTestWhisperEngine(text: "Translate this")
+    ) { _ in AppTestTranslationEngine() }
+
+    viewModel.start()
+    try await appEventually { viewModel.status == "Listening" }
+    audioFactory.yield(appTestAudioChunk(timestamp: 0))
+    try await appEventually { selectionRecorder.latest != nil }
+
+    #expect(selectionRecorder.latest?.profile.id == firstID)
+    #expect(selectionRecorder.latest?.model == "first-model")
+    viewModel.stop()
+    try await appEventually { viewModel.activeMode == .idle }
+}
+
+@Test @MainActor
+func translationStartBlocksWhenSelectedProfileSecretIsMissing() async throws {
+    let audioFactory = AppTestAudioFactory()
+    let customID = UUID()
+    let customCredential = CredentialID("custom-provider-secret")
+    let custom = ProviderProfile(
+        id: customID,
+        name: "Custom Bearer",
+        kind: .custom,
+        endpoint: URL(string: "https://api.example.com/v1")!,
+        apiStyle: .chatCompletions,
+        authentication: .bearer(credentialID: customCredential),
+        models: [.translation: ["custom-model"]]
+    )
+    let profileStore = AppTestProfileStore(configuration: ProviderConfiguration(
+        profiles: [custom],
+        selections: [
+            .translation: CapabilitySelection(profileID: customID, model: "custom-model"),
+        ]
+    ))
+    let credentials = AppTestCredentialStore() // no custom secret
+    let keyStore = AppTestAPIKeyStore(storedKey: "sk-openai-present")
+    let viewModel = makeViewModel(
+        keyStore: keyStore,
+        audioFactory: audioFactory,
+        profileStore: profileStore,
+        credentialStore: credentials
+    ) { _ in AppTestTranslationEngine() }
+    await viewModel.load()
+    #expect(viewModel.apiKey == "sk-openai-present")
+
+    viewModel.start()
+    try await appEventually {
+        viewModel.activeMode == .idle
+            && viewModel.lastError == MLingoError.missingAPIKey.localizedDescription
+    }
+    #expect(audioFactory.makeCount == 0)
+    #expect(viewModel.commandAvailability.canStartTranslation)
+    #expect(viewModel.errorRecoveryActions == [.openSettings])
+    #expect(!viewModel.errorRecoveryActions.contains(.stopTranslation))
+}
+
+@Test @MainActor
+func translationDestinationDescriptionTracksResolvedProvider() async throws {
+    let ollamaID = UUID()
+    let ollama = OpenAICompatiblePresets.make(
+        kind: .ollama,
+        name: "Ollama",
+        id: ollamaID,
+        models: [.translation: ["llama3.2"]]
+    )
+    let profileStore = AppTestProfileStore(configuration: ProviderConfiguration(
+        profiles: [ollama],
+        selections: [
+            .translation: CapabilitySelection(profileID: ollamaID, model: "llama3.2"),
+        ]
+    ))
+    let viewModel = makeViewModel(profileStore: profileStore) { _ in
+        AppTestTranslationEngine()
+    }
+    await viewModel.load()
+    #expect(viewModel.translationDestinationDescription.contains("local"))
+    #expect(viewModel.translationDestinationDescription.contains("Ollama"))
+    #expect(!viewModel.translationDestinationDescription.contains("OpenAI"))
+
+    // Remote Ollama-compatible host must not be labeled "local" just because of kind.
+    let remoteOllama = ProviderProfile(
+        id: UUID(),
+        name: "Ollama Cloud",
+        kind: .ollama,
+        endpoint: URL(string: "https://ollama.example.com/v1")!,
+        apiStyle: .chatCompletions,
+        authentication: .none,
+        models: [:]
+    )
+    #expect(
+        MLingoViewModel.destinationDescription(for: remoteOllama)
+            == "Ollama Cloud (ollama.example.com)"
+    )
+    #expect(!MLingoViewModel.destinationDescription(for: remoteOllama).contains("this Mac"))
+
+    #expect(
+        MLingoViewModel.destinationDescription(
+            for: ProviderProfile(
+                id: UUID(),
+                name: "Corp Gateway",
+                kind: .custom,
+                endpoint: URL(string: "https://llm.corp.example/v1")!,
+                apiStyle: .chatCompletions,
+                authentication: .none,
+                models: [:]
+            )
+        ) == "Corp Gateway (llm.corp.example)"
+    )
+    #expect(
+        MLingoViewModel.destinationDescription(
+            for: OpenAICompatiblePresets.make(kind: .openAI)
+        ) == "OpenAI"
+    )
+}
+
+@Test @MainActor
+func openAIKindUsesActualRemoteHostForPrivacyDestination() {
+    let proxiedOpenAI = ProviderProfile(
+        id: UUID(),
+        name: "OpenAI via Corp Gateway",
+        kind: .openAI,
+        endpoint: URL(string: "https://llm.corp.example/v1")!,
+        apiStyle: .responses,
+        authentication: .none,
+        models: [:]
+    )
+
+    #expect(
+        MLingoViewModel.destinationDescription(for: proxiedOpenAI)
+            == "OpenAI via Corp Gateway (llm.corp.example)"
+    )
+}
+
+@Test @MainActor
+func preparingTranslationCanBeStoppedBeforePipelineStarts() async throws {
+    let audioFactory = AppTestAudioFactory()
+    let ollamaID = UUID()
+    let ollama = OpenAICompatiblePresets.make(
+        kind: .ollama,
+        id: ollamaID,
+        models: [.translation: ["llama3.2"]]
+    )
+    let profileStore = AppTestProfileStore(
+        configuration: ProviderConfiguration(
+            profiles: [ollama],
+            selections: [
+                .translation: CapabilitySelection(profileID: ollamaID, model: "llama3.2"),
+            ]
+        ),
+        loadDelayNanoseconds: 200_000_000
+    )
+    let viewModel = makeViewModel(
+        audioFactory: audioFactory,
+        profileStore: profileStore
+    ) { _ in AppTestTranslationEngine() }
+
+    viewModel.start()
+    try await appEventually { viewModel.activeMode == .preparingTranslation }
+    #expect(viewModel.commandAvailability.canStop)
+    #expect(!viewModel.commandAvailability.canStartTranslation)
+
+    viewModel.stop()
+    try await appEventually { viewModel.activeMode == .idle }
+    #expect(viewModel.status == "Stopped")
+    #expect(audioFactory.makeCount == 0)
+}
+
 @Test
 func appIssuePresentationMapsTypedErrorsToContextualRecovery() {
     #expect(
@@ -325,8 +615,39 @@ func appIssuePresentationMapsTypedErrorsToContextualRecovery() {
     #expect(
         AppIssuePresentation(
             error: .quotaExceeded,
-            isTranslationActive: true
+            isTranslationActive: true,
+            translationProviderKind: .openAI
+        ).actions == [.openSettings, .stopTranslation]
+    )
+    #expect(
+        AppIssuePresentation(
+            error: .quotaExceeded,
+            isTranslationActive: true,
+            translationProviderKind: .openAI,
+            translationProviderEndpoint: URL(string: "https://api.openai.com/v1")!
         ).actions == [.openOpenAIUsage, .stopTranslation]
+    )
+    #expect(
+        AppIssuePresentation(
+            error: .quotaExceeded,
+            isTranslationActive: true,
+            translationProviderKind: .openAI,
+            translationProviderEndpoint: URL(string: "https://gateway.example/v1")!
+        ).actions == [.openSettings, .stopTranslation]
+    )
+    #expect(
+        AppIssuePresentation(
+            error: .quotaExceeded,
+            isTranslationActive: true,
+            translationProviderKind: .ollama
+        ).actions == [.openSettings, .stopTranslation]
+    )
+    #expect(
+        AppIssuePresentation(
+            error: .quotaExceeded,
+            isTranslationActive: false,
+            translationProviderKind: .custom
+        ).actions == [.openSettings]
     )
     #expect(
         AppIssuePresentation(
@@ -559,12 +880,16 @@ private func makeViewModel(
     audioFactory: AppTestAudioFactory = AppTestAudioFactory(),
     overlayEngine: AppTestOverlayEngine = AppTestOverlayEngine(),
     providerMigration: (any ProviderMigrationProtocol)? = nil,
+    profileStore: (any ProviderProfileStoreProtocol)? = nil,
+    credentialStore: (any ProviderCredentialStoreProtocol)? = nil,
+    pipelineTranslationEngine: (any TranslationEngineProtocol)? = nil,
+    whisperEngine: (any WhisperEngineProtocol)? = nil,
     translationTestEngineFactory: @escaping MLingoViewModel.TranslationTestEngineFactory
 ) -> MLingoViewModel {
     let pipeline = SubtitlePipeline(
         audioEngineFactory: audioFactory,
-        whisperEngine: AppTestWhisperEngine(),
-        translationEngine: AppTestTranslationEngine(),
+        whisperEngine: whisperEngine ?? AppTestWhisperEngine(),
+        translationEngine: pipelineTranslationEngine ?? AppTestTranslationEngine(),
         overlayEngine: overlayEngine,
         settingsStore: settingsStore
     )
@@ -575,8 +900,61 @@ private func makeViewModel(
         pipeline: pipeline,
         audioEngineFactory: audioFactory,
         providerMigration: providerMigration,
+        profileStore: profileStore,
+        credentialStore: credentialStore,
         translationTestEngineFactory: translationTestEngineFactory
     )
+}
+
+private actor AppTestProfileStore: ProviderProfileStoreProtocol {
+    private var configuration: ProviderConfiguration
+    private let subsequentConfiguration: ProviderConfiguration?
+    private let loadDelayNanoseconds: UInt64
+    private var loadCount = 0
+
+    init(
+        configuration: ProviderConfiguration,
+        subsequentConfiguration: ProviderConfiguration? = nil,
+        loadDelayNanoseconds: UInt64 = 0
+    ) {
+        self.configuration = configuration
+        self.subsequentConfiguration = subsequentConfiguration
+        self.loadDelayNanoseconds = loadDelayNanoseconds
+    }
+
+    func load() async throws -> ProviderConfiguration {
+        if loadDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: loadDelayNanoseconds)
+        }
+        defer { loadCount += 1 }
+        if loadCount > 0, let subsequentConfiguration {
+            return subsequentConfiguration
+        }
+        return configuration
+    }
+
+    func save(_ configuration: ProviderConfiguration) async throws {
+        self.configuration = configuration
+    }
+}
+
+private final class AppTestCredentialStore: ProviderCredentialStoreProtocol,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var values: [CredentialID: String] = [:]
+
+    func loadCredential(for id: CredentialID) throws -> String? {
+        lock.withLock { values[id] }
+    }
+
+    func saveCredential(_ secret: String, for id: CredentialID) throws {
+        lock.withLock { values[id] = secret }
+    }
+
+    func deleteCredential(for id: CredentialID) throws {
+        lock.withLock { _ = values.removeValue(forKey: id) }
+    }
 }
 
 private final class AppTestProviderMigration: ProviderMigrationProtocol,
@@ -704,8 +1082,44 @@ private actor AppTestTranslationEngine: TranslationEngineProtocol {
 }
 
 private actor AppTestWhisperEngine: WhisperEngineProtocol {
+    private let text: String?
+
+    init(text: String? = nil) {
+        self.text = text
+    }
+
     func loadModel(named modelName: String) async throws {}
-    func transcribe(_ chunk: AudioChunk, language: String) async throws -> Transcript? { nil }
+    func transcribe(_ chunk: AudioChunk, language: String) async throws -> Transcript? {
+        text.map { Transcript(text: $0, timestamp: chunk.timestamp) }
+    }
+}
+
+private actor AppRecordingTranslationProvider: TranslationProvider {
+    func translate(_ request: TranslationProviderRequest) async throws -> SubtitleItem {
+        SubtitleItem(
+            original: request.translation.current.text,
+            translated: "Bản dịch",
+            start: request.translation.current.timestamp,
+            end: request.translation.current.timestamp + 2
+        )
+    }
+}
+
+private final class AppResolvedSelectionRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private let provider: any TranslationProvider
+    private var storedSelection: ResolvedProviderSelection?
+
+    init(provider: any TranslationProvider) {
+        self.provider = provider
+    }
+
+    var latest: ResolvedProviderSelection? { lock.withLock { storedSelection } }
+
+    func resolve(_ selection: ResolvedProviderSelection) -> any TranslationProvider {
+        lock.withLock { storedSelection = selection }
+        return provider
+    }
 }
 
 @MainActor
@@ -731,23 +1145,36 @@ private final class AppTestAudioFactory: AudioEngineFactoryProtocol, @unchecked 
     private let lock = NSLock()
     private let startError: (any Error)?
     private(set) var makeCount = 0
+    private var activeEngine: AppTestAudioEngine?
 
     init(startError: (any Error)? = nil) {
         self.startError = startError
     }
 
     func makeAudioEngine(preferredBackend: AudioCaptureBackend) -> any AudioEngineProtocol {
-        lock.withLock { makeCount += 1 }
-        return AppTestAudioEngine(startError: startError)
+        lock.withLock {
+            makeCount += 1
+            let engine = AppTestAudioEngine(startError: startError)
+            activeEngine = engine
+            return engine
+        }
+    }
+
+    func yield(_ chunk: AudioChunk) {
+        lock.withLock { activeEngine }?.yield(chunk)
     }
 }
 
 private final class AppTestAudioEngine: AudioEngineProtocol, @unchecked Sendable {
-    let chunks = AsyncStream<AudioChunk> { $0.finish() }
+    let chunks: AsyncStream<AudioChunk>
     let diagnostics = AsyncStream<AudioCaptureDiagnostics> { $0.finish() }
+    private let continuation: AsyncStream<AudioChunk>.Continuation
     private let startError: (any Error)?
 
     init(startError: (any Error)? = nil) {
+        let (chunks, continuation) = AsyncStream.makeStream(of: AudioChunk.self)
+        self.chunks = chunks
+        self.continuation = continuation
         self.startError = startError
     }
 
@@ -756,6 +1183,20 @@ private final class AppTestAudioEngine: AudioEngineProtocol, @unchecked Sendable
         if let startError { throw startError }
     }
     func stop() async {}
+
+    func yield(_ chunk: AudioChunk) {
+        continuation.yield(chunk)
+    }
+}
+
+private func appTestAudioChunk(timestamp: TimeInterval) -> AudioChunk {
+    AudioChunk(
+        samples: Array(repeating: 0.05, count: 48_000),
+        sampleRate: 16_000,
+        channelCount: 1,
+        timestamp: timestamp,
+        duration: 3
+    )
 }
 
 @MainActor

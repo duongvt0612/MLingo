@@ -87,6 +87,7 @@ public final class SubtitlePipeline {
     @discardableResult
     public func start(
         mode: SubtitlePipelineMode = .translation,
+        translationSelection: ResolvedProviderSelection? = nil,
         onError: @escaping ErrorHandler,
         onWarning: @escaping @Sendable (String) -> Void = { _ in },
         onAudioDiagnostics: (@Sendable (AudioCaptureDiagnostics) async -> Void)? = nil,
@@ -117,6 +118,7 @@ public final class SubtitlePipeline {
                         transcript,
                         mode: mode,
                         settings: settings,
+                        translationSelection: translationSelection,
                         sessionID: newSessionID,
                         onTranscript: onTranscript,
                         onError: onError,
@@ -288,6 +290,7 @@ public final class SubtitlePipeline {
         _ transcript: Transcript,
         mode: SubtitlePipelineMode,
         settings: AppSettings,
+        translationSelection: ResolvedProviderSelection?,
         sessionID expectedSessionID: UUID,
         onTranscript: TranscriptHandler,
         onError: @escaping ErrorHandler,
@@ -306,6 +309,7 @@ public final class SubtitlePipeline {
         enqueueTranslation(
             transcript,
             settings: settings,
+            translationSelection: translationSelection,
             sessionID: expectedSessionID,
             onError: onError,
             onWarning: onWarning
@@ -315,6 +319,7 @@ public final class SubtitlePipeline {
     private func enqueueTranslation(
         _ transcript: Transcript,
         settings: AppSettings,
+        translationSelection: ResolvedProviderSelection?,
         sessionID expectedSessionID: UUID,
         onError: @escaping ErrorHandler,
         onWarning: @escaping @Sendable (String) -> Void
@@ -367,6 +372,7 @@ public final class SubtitlePipeline {
         translationTask = Task { [weak self] in
             await self?.drainTranslations(
                 settings: settings,
+                translationSelection: translationSelection,
                 sessionID: expectedSessionID,
                 onError: onError
             )
@@ -375,6 +381,7 @@ public final class SubtitlePipeline {
 
     private func drainTranslations(
         settings: AppSettings,
+        translationSelection: ResolvedProviderSelection?,
         sessionID expectedSessionID: UUID,
         onError: @escaping ErrorHandler
     ) async {
@@ -407,7 +414,11 @@ public final class SubtitlePipeline {
             )
 
             do {
-                let subtitle = try await translationEngine.translate(request, settings: settings)
+                let subtitle = try await translationEngine.translate(
+                    request,
+                    settings: settings,
+                    selection: translationSelection
+                )
                 let translationEnded = now()
                 PerformanceSignposts.signposter.endInterval(
                     "translation.request",

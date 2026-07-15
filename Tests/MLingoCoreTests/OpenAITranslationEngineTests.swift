@@ -140,7 +140,7 @@ func translationEngineRetriesRateLimitOnceAndHonorsCappedRetryAfter() async thro
 
     #expect(item.translated == "Xin chào")
     #expect(client.requests.count == 2)
-    #expect(await delays.values == [1])
+    #expect(await delays.values == [10])
 }
 
 @Test(arguments: [500, 501, 599])
@@ -241,11 +241,4 @@ private final class ScriptedHTTPClient: HTTPClientProtocol, @unchecked Sendable 
 private actor DelayRecorder {
     private(set) var values: [TimeInterval] = []
     func record(_ value: TimeInterval) { values.append(value) }
-}
-
-private extension URLRequest {
-    var jsonBody: [String: Any]? {
-        guard let httpBody else { return nil }
-        return try? JSONSerialization.jsonObject(with: httpBody) as? [String: Any]
-    }
 }

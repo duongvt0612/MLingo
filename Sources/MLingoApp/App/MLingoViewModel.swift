@@ -26,6 +26,8 @@ final class MLingoViewModel {
 
     enum ActiveMode: Equatable {
         case idle
+        /// Profile resolve / credential preflight before the pipeline starts.
+        case preparingTranslation
         case soundTest
         case transcriptionTest
         case translation
@@ -49,11 +51,18 @@ final class MLingoViewModel {
     private(set) var isSavingSettings = false
     private(set) var translationTestState: TranslationTestState = .idle
     private(set) var transcriptionEntries: [TranscriptLogEntry] = []
+    /// User-facing destination for privacy copy (local / OpenAI / custom host).
+    private(set) var translationDestinationDescription =
+        "a configured translation provider"
     var audioDiagnostics = AudioCaptureDiagnostics()
     var whisperDiagnostics = WhisperDiagnostics()
     var performanceDiagnostics = PipelinePerformanceDiagnostics()
 
     var isRunning: Bool { activeMode == .translation }
+    /// True while preflighting or running a translation session (Stop should cancel both).
+    var isTranslationSession: Bool {
+        activeMode == .preparingTranslation || activeMode == .translation
+    }
     var isTestingSound: Bool { activeMode == .soundTest }
     var isTestingTranscription: Bool { activeMode == .transcriptionTest }
     var isActive: Bool { activeMode != .idle }
@@ -86,11 +95,17 @@ final class MLingoViewModel {
     private let pipeline: SubtitlePipeline
     private let audioEngineFactory: any AudioEngineFactoryProtocol
     private let providerMigration: (any ProviderMigrationProtocol)?
+    private let profileStore: (any ProviderProfileStoreProtocol)?
+    private let credentialStore: (any ProviderCredentialStoreProtocol)?
     private let translationTestEngineFactory: TranslationTestEngineFactory
     private var startTask: Task<Void, Never>?
     private var activeSessionID = UUID()
     private var soundTestEngine: (any AudioEngineProtocol)?
     private var soundDiagnosticsTask: Task<Void, Never>?
+    /// Provider kind for the active/preparing translation selection (recovery UI).
+    private var activeTranslationProviderKind: ProviderKind?
+    /// Provider endpoint from the same immutable selection used by the active session.
+    private var activeTranslationProviderEndpoint: URL?
 
     init(
         settings: AppSettings,
@@ -99,6 +114,8 @@ final class MLingoViewModel {
         pipeline: SubtitlePipeline,
         audioEngineFactory: any AudioEngineFactoryProtocol,
         providerMigration: (any ProviderMigrationProtocol)? = nil,
+        profileStore: (any ProviderProfileStoreProtocol)? = nil,
+        credentialStore: (any ProviderCredentialStoreProtocol)? = nil,
         translationTestEngineFactory: @escaping TranslationTestEngineFactory
     ) {
         self.settings = settings
@@ -107,6 +124,8 @@ final class MLingoViewModel {
         self.pipeline = pipeline
         self.audioEngineFactory = audioEngineFactory
         self.providerMigration = providerMigration
+        self.profileStore = profileStore
+        self.credentialStore = credentialStore
         self.translationTestEngineFactory = translationTestEngineFactory
         whisperDiagnostics.modelID = settings.whisperModel
     }
@@ -123,11 +142,14 @@ final class MLingoViewModel {
             legacyAPIKeyStore: legacyAPIKeyStore
         )
         let overlay = FloatingSubtitleWindowController()
-        let openAIEngine = OpenAITranslationEngine(apiKeyStore: apiKeyStore)
-        let openAIProvider = OpenAITranslationProviderAdapter(engine: openAIEngine)
         let translation = ProviderTranslationEngine(
             profileStore: profileStore,
-            providerResolver: { _ in openAIProvider }
+            providerResolver: { selection in
+                OpenAICompatibleTranslationProviderFactory.make(
+                    selection: selection,
+                    credentialStore: credentialStore
+                )
+            }
         )
         let audioEngineFactory = SystemAudioEngineFactory()
         let pipeline = SubtitlePipeline(
@@ -145,6 +167,8 @@ final class MLingoViewModel {
             pipeline: pipeline,
             audioEngineFactory: audioEngineFactory,
             providerMigration: migration,
+            profileStore: profileStore,
+            credentialStore: credentialStore,
             translationTestEngineFactory: { apiKey in
                 OpenAITranslationEngine(
                     apiKeyStore: TransientAPIKeyStore(apiKey: apiKey)
@@ -171,6 +195,8 @@ final class MLingoViewModel {
                 present(error)
             }
         }
+
+        await refreshTranslationDestinationDescription()
 
         do {
             let loadedAPIKey = try apiKeyStore.loadAPIKey()?
@@ -350,23 +376,177 @@ final class MLingoViewModel {
             status = "Settings need attention"
             return
         }
-        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            present(.missingAPIKey)
-            status = "Settings need attention"
+        guard activeMode == .idle, startTask == nil else { return }
+
+        // Legacy path (no profile store): OpenAI key is always required.
+        guard profileStore != nil else {
+            activeTranslationProviderKind = .openAI
+            activeTranslationProviderEndpoint = URL(string: "https://api.openai.com/v1")
+            guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                present(.missingAPIKey)
+                status = "Settings need attention"
+                return
+            }
+            startPipeline(mode: .translation)
             return
         }
-        startPipeline(mode: .translation)
+
+        // Profile-aware path: resolve selection, verify the profile's own credential ID.
+        let sessionID = UUID()
+        activeSessionID = sessionID
+        activeMode = .preparingTranslation
+        status = "Preparing translation"
+        clearError()
+        startTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.activeSessionID == sessionID,
+                   self.activeMode == .preparingTranslation
+                {
+                    self.startTask = nil
+                }
+            }
+
+            do {
+                try Task.checkCancellation()
+                let selection = try await self.resolveTranslationSelection()
+                try Task.checkCancellation()
+                guard self.isCurrentSession(sessionID, mode: .preparingTranslation) else {
+                    return
+                }
+
+                self.activeTranslationProviderKind = selection.profile.kind
+                self.activeTranslationProviderEndpoint = selection.profile.endpoint
+                self.applyTranslationDestination(from: selection.profile)
+                try self.ensureCredentialPresent(for: selection.profile.authentication)
+                try Task.checkCancellation()
+                guard self.isCurrentSession(sessionID, mode: .preparingTranslation) else {
+                    return
+                }
+
+                self.startTask = nil
+                // Promote preparing → pipeline start with a fresh session.
+                self.activeMode = .idle
+                self.startPipeline(
+                    mode: .translation,
+                    translationSelection: selection
+                )
+            } catch is CancellationError {
+                if self.isCurrentSession(sessionID, mode: .preparingTranslation) {
+                    self.activeMode = .idle
+                    self.status = "Stopped"
+                    self.activeTranslationProviderKind = nil
+                    self.activeTranslationProviderEndpoint = nil
+                    self.startTask = nil
+                }
+            } catch {
+                if self.isCurrentSession(sessionID, mode: .preparingTranslation) {
+                    // Return to idle before presenting so recovery does not offer Stop.
+                    self.activeMode = .idle
+                    self.startTask = nil
+                    self.status = "Settings need attention"
+                    self.present(error)
+                }
+            }
+        }
+    }
+
+    /// Resolves the registry translation selection (profile + model).
+    func resolveTranslationSelection() async throws -> ResolvedProviderSelection {
+        guard let profileStore else {
+            throw MLingoError.invalidTranslationConfiguration(
+                "No provider profile store is configured."
+            )
+        }
+        let configuration = try await profileStore.load()
+        return try ProviderRegistry(
+            profiles: configuration.profiles,
+            selections: configuration.selections
+        ).resolve(.translation)
+    }
+
+    /// Verifies the secret for the selected profile's auth, not the OpenAI default key.
+    func ensureCredentialPresent(for authentication: ProviderAuthentication) throws {
+        guard let credentialID = authentication.credentialID else { return }
+
+        let secret: String?
+        if let credentialStore {
+            secret = try credentialStore.loadCredential(for: credentialID)
+        } else if credentialID == ProviderDefaults.openAICredentialID {
+            // Legacy / test path without a multi-credential store.
+            secret = try apiKeyStore.loadAPIKey() ?? apiKey
+        } else {
+            secret = nil
+        }
+
+        let trimmed = secret?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else {
+            throw MLingoError.missingAPIKey
+        }
+    }
+
+    func refreshTranslationDestinationDescription() async {
+        guard profileStore != nil else {
+            translationDestinationDescription = "OpenAI"
+            activeTranslationProviderKind = .openAI
+            activeTranslationProviderEndpoint = URL(string: "https://api.openai.com/v1")
+            return
+        }
+        do {
+            let selection = try await resolveTranslationSelection()
+            activeTranslationProviderKind = selection.profile.kind
+            activeTranslationProviderEndpoint = selection.profile.endpoint
+            applyTranslationDestination(from: selection.profile)
+        } catch {
+            translationDestinationDescription = "a configured translation provider"
+        }
+    }
+
+    func applyTranslationDestination(from profile: ProviderProfile) {
+        translationDestinationDescription = Self.destinationDescription(for: profile)
+    }
+
+    static func destinationDescription(for profile: ProviderProfile) -> String {
+        // Only built-in/system are local by kind. Network kinds use real loopback host checks.
+        switch profile.kind {
+        case .builtInMLX:
+            return "the local \(profile.name) model on this Mac"
+        case .system:
+            return "the system translation service"
+        case .openAI, .ollama, .lmStudio, .custom:
+            break
+        }
+
+        if let endpoint = profile.endpoint, endpoint.isLoopbackHost {
+            return "the local \(profile.name) endpoint on this Mac"
+        }
+        if profile.kind == .openAI,
+           profile.endpoint?.isOfficialOpenAIAPIEndpoint == true {
+            return "OpenAI"
+        }
+        if let host = profile.endpoint?.host, !host.isEmpty {
+            return "\(profile.name) (\(host))"
+        }
+        return profile.name
     }
 
     func stop() {
-        guard activeMode == .translation else { return }
-        stopActiveMode(statusAfterStop: "Stopped")
+        switch activeMode {
+        case .preparingTranslation:
+            cancelPreparingTranslation(statusAfterStop: "Stopped")
+        case .translation:
+            stopActiveMode(statusAfterStop: "Stopped")
+        default:
+            break
+        }
     }
 
     func stopCurrentActivity() {
         switch activeMode {
         case .idle:
             break
+        case .preparingTranslation:
+            cancelPreparingTranslation(statusAfterStop: "Stopped")
         case .soundTest:
             stopSoundTest()
         case .transcriptionTest:
@@ -374,6 +554,17 @@ final class MLingoViewModel {
         case .translation:
             stop()
         }
+    }
+
+    private func cancelPreparingTranslation(statusAfterStop: String) {
+        let pending = startTask
+        startTask = nil
+        pending?.cancel()
+        activeMode = .idle
+        activeTranslationProviderKind = nil
+        activeTranslationProviderEndpoint = nil
+        status = statusAfterStop
+        errorRecoveryActions.removeAll { $0 == .stopTranslation }
     }
 
     func toggleOverlayVisibility() {
@@ -466,7 +657,10 @@ final class MLingoViewModel {
         stopActiveMode(statusAfterStop: "Sound test stopped")
     }
 
-    private func startPipeline(mode: SubtitlePipelineMode) {
+    private func startPipeline(
+        mode: SubtitlePipelineMode,
+        translationSelection: ResolvedProviderSelection? = nil
+    ) {
         guard activeMode == .idle, startTask == nil else { return }
 
         let viewMode: ActiveMode = mode == .translation ? .translation : .transcriptionTest
@@ -497,6 +691,7 @@ final class MLingoViewModel {
 
             let started = await pipeline.start(
                 mode: mode,
+                translationSelection: translationSelection,
                 onError: { [weak self, sessionID] error in
                     guard self?.activeSessionID == sessionID else { return }
                     self?.present(error)
@@ -570,6 +765,8 @@ final class MLingoViewModel {
         guard activeSessionID == finishingSessionID else { return }
         activeSessionID = UUID()
         activeMode = .idle
+        activeTranslationProviderKind = nil
+        activeTranslationProviderEndpoint = nil
         errorRecoveryActions.removeAll { $0 == .stopTranslation }
 
         if let statusAfterStop {
@@ -621,7 +818,9 @@ final class MLingoViewModel {
     private func present(_ error: MLingoError) {
         let presentation = AppIssuePresentation(
             error: error,
-            isTranslationActive: isRunning
+            isTranslationActive: isTranslationSession,
+            translationProviderKind: activeTranslationProviderKind,
+            translationProviderEndpoint: activeTranslationProviderEndpoint
         )
         lastError = presentation.message
         errorRecoveryActions = presentation.actions

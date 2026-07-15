@@ -2,8 +2,14 @@ import Foundation
 import Testing
 @testable import MLingoCore
 
+/// Opt-in live OpenAI suite. Requires both:
+/// - `MLINGO_RUN_LIVE_PROVIDER_TESTS=1`
+/// - `OPENAI_API_KEY`
 @Test
-func openAITranslatesLiveFixtureWhenAPIKeyIsAvailable() async throws {
+func openAITranslatesLiveFixtureWhenExplicitlyEnabled() async throws {
+    guard ProcessInfo.processInfo.environment["MLINGO_RUN_LIVE_PROVIDER_TESTS"] == "1" else {
+        return
+    }
     guard
         let apiKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"]?
             .trimmingCharacters(in: .whitespacesAndNewlines),

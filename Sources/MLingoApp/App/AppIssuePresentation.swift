@@ -1,3 +1,4 @@
+import Foundation
 import MLingoCore
 
 enum AppRecoveryAction: Equatable, Sendable {
@@ -27,7 +28,12 @@ struct AppIssuePresentation: Equatable, Sendable {
     let message: String
     let actions: [AppRecoveryAction]
 
-    init(error: MLingoError, isTranslationActive: Bool) {
+    init(
+        error: MLingoError,
+        isTranslationActive: Bool,
+        translationProviderKind: ProviderKind? = nil,
+        translationProviderEndpoint: URL? = nil
+    ) {
         message = error.localizedDescription
 
         let primaryAction: AppRecoveryAction = switch error {
@@ -38,7 +44,13 @@ struct AppIssuePresentation: Equatable, Sendable {
              .captureFailed:
             .openSystemSettings
         case .quotaExceeded:
-            .openOpenAIUsage
+            // Only OpenAI accounts have a meaningful platform usage page.
+            if translationProviderKind == .openAI,
+               translationProviderEndpoint?.isOfficialOpenAIAPIEndpoint == true {
+                .openOpenAIUsage
+            } else {
+                .openSettings
+            }
         case .missingAPIKey,
              .whisperModelUnavailable,
              .whisperModelLoadFailed,
