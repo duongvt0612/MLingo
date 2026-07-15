@@ -156,6 +156,7 @@ enum SettingsDraftIssue: Equatable, Sendable {
     case invalidAppSettings(AppSettingsField, String)
     case invalidProfile(UUID, ProviderProfileValidationIssue)
     case invalidSelection(ModelCapability, ProviderResolutionIssue)
+    case emptyCredentialReplacement(CredentialID)
 }
 
 struct SettingsDraftValidation: Equatable, Sendable {
@@ -211,6 +212,13 @@ struct SettingsEditorDraft: Equatable, Sendable {
                 issues.append(.invalidSelection(capability, error.issue))
             } catch {
                 assertionFailure("ProviderRegistry returned an unexpected error: \(error)")
+            }
+        }
+
+        for (credentialID, mutation) in credentialMutations {
+            if case .replace(let secret) = mutation,
+               secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                issues.append(.emptyCredentialReplacement(credentialID))
             }
         }
 
