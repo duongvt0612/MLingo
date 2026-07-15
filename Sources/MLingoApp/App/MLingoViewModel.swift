@@ -532,6 +532,7 @@ final class MLingoViewModel {
         guard activeSessionID == finishingSessionID else { return }
         activeSessionID = UUID()
         activeMode = .idle
+        errorRecoveryActions.removeAll { $0 == .stopTranslation }
 
         if let statusAfterStop {
             status = statusAfterStop

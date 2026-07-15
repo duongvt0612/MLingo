@@ -331,7 +331,7 @@ func appIssuePresentationMapsTypedErrorsToContextualRecovery() {
 }
 
 @Test @MainActor
-func appCommandAvailabilityTracksActiveModeAndOverlayState() {
+func appCommandAvailabilityTracksActiveModeAndOverlayState() async throws {
     let viewModel = makeViewModel { _ in AppTestTranslationEngine() }
 
     #expect(viewModel.commandAvailability.canStartTranslation)
@@ -344,6 +344,9 @@ func appCommandAvailabilityTracksActiveModeAndOverlayState() {
     #expect(!viewModel.commandAvailability.canStartTranslation)
     #expect(viewModel.commandAvailability.canStop)
     #expect(viewModel.commandAvailability.canToggleOverlay)
+
+    viewModel.stop()
+    try await appEventually { viewModel.activeMode == .idle }
 }
 
 @Test @MainActor
@@ -462,6 +465,24 @@ func startPipelineEndsActiveModeWhenAudioStartupFails() async throws {
             && viewModel.activeMode == .idle
     }
     #expect(viewModel.status != "Testing transcription")
+}
+
+@Test @MainActor
+func failedTranslationStartupRemovesStopRecoveryAfterReturningIdle() async throws {
+    let audioFactory = AppTestAudioFactory(startError: MLingoError.networkOffline)
+    let viewModel = makeViewModel(
+        audioFactory: audioFactory,
+        translationTestEngineFactory: { _ in AppTestTranslationEngine() }
+    )
+    viewModel.apiKey = "sk-test"
+
+    viewModel.start()
+
+    try await appEventually {
+        viewModel.lastError == MLingoError.networkOffline.localizedDescription
+            && viewModel.activeMode == .idle
+    }
+    #expect(viewModel.errorRecoveryActions == [.dismiss])
 }
 
 @Test @MainActor

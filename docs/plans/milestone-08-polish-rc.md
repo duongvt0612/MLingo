@@ -42,7 +42,7 @@ Hoàn thiện MLingo thành bản RC dùng cục bộ trên Apple Silicon: nativ
 
 ## Kết quả validation tự động
 
-- [x] `rtk proxy swift test` — **174 tests passed**.
+- [x] `rtk proxy swift test` — **175 tests passed**.
 - [x] `rtk proxy swift build -c release` — build succeeded.
 - [x] Native Xcode Release build cho `generic/platform=macOS`, arm64 — `** BUILD SUCCEEDED **`.
 - [x] `./scripts/build-local-rc.sh` — archive succeeded và tạo `.build/release/MLingo.app`.

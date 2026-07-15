@@ -11,7 +11,7 @@ func appIconGeneratorRejectsMissingAndEmptyOutputArguments() throws {
 
     for arguments in [[], [""]] {
         let workingDirectory = FileManager.default.temporaryDirectory
-            .appending(path: "MLingoAppIconGeneratorTests-(UUID().uuidString)")
+            .appending(path: "MLingoAppIconGeneratorTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(
             at: workingDirectory,
             withIntermediateDirectories: true
