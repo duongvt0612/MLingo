@@ -292,7 +292,61 @@ func translationStartWithoutAPIKeyStaysIdleAndDoesNotCreateAudio() {
 
     #expect(viewModel.activeMode == .idle)
     #expect(viewModel.lastError == MLingoError.missingAPIKey.localizedDescription)
+    #expect(viewModel.errorRecoveryActions == [.openSettings])
     #expect(audioFactory.makeCount == 0)
+}
+
+@Test
+func appIssuePresentationMapsTypedErrorsToContextualRecovery() {
+    #expect(
+        AppIssuePresentation(
+            error: .systemAudioPermissionDenied,
+            isTranslationActive: false
+        ).actions == [.openSystemSettings]
+    )
+    #expect(
+        AppIssuePresentation(
+            error: .quotaExceeded,
+            isTranslationActive: true
+        ).actions == [.openOpenAIUsage, .stopTranslation]
+    )
+    #expect(
+        AppIssuePresentation(
+            error: .noAudioSource,
+            isTranslationActive: false
+        ).actions == [.openSystemSettings]
+    )
+    #expect(
+        AppIssuePresentation(
+            error: .networkOffline,
+            isTranslationActive: true
+        ).actions == [.dismiss, .stopTranslation]
+    )
+    #expect(
+        AppIssuePresentation(
+            error: .requestTimedOut,
+            isTranslationActive: true
+        ).actions == [.dismiss]
+    )
+}
+
+@Test @MainActor
+func appCommandAvailabilityTracksActiveModeAndOverlayState() async throws {
+    let viewModel = makeViewModel { _ in AppTestTranslationEngine() }
+
+    #expect(viewModel.commandAvailability.canStartTranslation)
+    #expect(!viewModel.commandAvailability.canStop)
+    #expect(!viewModel.commandAvailability.canToggleOverlay)
+
+    viewModel.apiKey = "sk-test"
+    viewModel.start()
+
+    #expect(!viewModel.commandAvailability.canStartTranslation)
+    #expect(viewModel.commandAvailability.canStop)
+    #expect(viewModel.commandAvailability.canToggleOverlay)
+
+    viewModel.stop()
+    try await appEventually { viewModel.activeMode == .idle }
 }
 
 @Test @MainActor
@@ -411,6 +465,24 @@ func startPipelineEndsActiveModeWhenAudioStartupFails() async throws {
             && viewModel.activeMode == .idle
     }
     #expect(viewModel.status != "Testing transcription")
+}
+
+@Test @MainActor
+func failedTranslationStartupRemovesStopRecoveryAfterReturningIdle() async throws {
+    let audioFactory = AppTestAudioFactory(startError: MLingoError.networkOffline)
+    let viewModel = makeViewModel(
+        audioFactory: audioFactory,
+        translationTestEngineFactory: { _ in AppTestTranslationEngine() }
+    )
+    viewModel.apiKey = "sk-test"
+
+    viewModel.start()
+
+    try await appEventually {
+        viewModel.lastError == MLingoError.networkOffline.localizedDescription
+            && viewModel.activeMode == .idle
+    }
+    #expect(viewModel.errorRecoveryActions == [.dismiss])
 }
 
 @Test @MainActor

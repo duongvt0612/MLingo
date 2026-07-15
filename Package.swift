@@ -33,7 +33,9 @@ let package = Package(
             name: "MLingoCore",
             dependencies: [
                 .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
-                .product(name: "MLXAudioSTT", package: "mlx-audio-swift")
+                .product(name: "MLXAudioSTT", package: "mlx-audio-swift"),
+                // Keep swift-transformers on the source-compatible Jinja release.
+                .product(name: "Jinja", package: "swift-jinja")
             ],
             path: "Sources/MLingoCore"
         ),

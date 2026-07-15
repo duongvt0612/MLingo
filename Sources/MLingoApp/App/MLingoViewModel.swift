@@ -44,6 +44,7 @@ final class MLingoViewModel {
     var status = "Ready"
     var lastError: String?
     var lastWarning: String?
+    private(set) var errorRecoveryActions: [AppRecoveryAction] = []
     private(set) var credentialState: CredentialState = .unknown
     private(set) var isSavingSettings = false
     private(set) var translationTestState: TranslationTestState = .idle
@@ -57,6 +58,9 @@ final class MLingoViewModel {
     var isTestingTranscription: Bool { activeMode == .transcriptionTest }
     var isActive: Bool { activeMode != .idle }
     var isTranslationTestRunning: Bool { translationTestState == .running }
+    var commandAvailability: AppCommandAvailability {
+        AppCommandAvailability(activeMode: activeMode)
+    }
     var overlayPresentationState: OverlayPresentationState {
         pipeline.overlayPresentationState
     }
@@ -139,7 +143,7 @@ final class MLingoViewModel {
             whisperDiagnostics.modelID = settings.whisperModel
         } catch {
             settingsLoadError = error.localizedDescription
-            lastError = settingsLoadError
+            present(error)
         }
 
         do {
@@ -148,16 +152,19 @@ final class MLingoViewModel {
             apiKey = loadedAPIKey
             credentialState = loadedAPIKey.isEmpty ? .notStored : .stored
             if settingsLoadError == nil {
-                lastError = nil
+                clearError()
             }
         } catch {
             let credentialError = error.localizedDescription
             apiKey = ""
             credentialState = .failed(credentialError)
             if let settingsLoadError {
-                lastError = "\(settingsLoadError)\n\(credentialError)"
+                presentMessage(
+                    "\(settingsLoadError)\n\(credentialError)",
+                    actions: [.openSettings]
+                )
             } else {
-                lastError = credentialError
+                present(error)
             }
         }
     }
@@ -179,9 +186,9 @@ final class MLingoViewModel {
 
         let validation = AppSettingsValidation(settings: candidateSettings)
         guard validation.isValid else {
-            lastError = MLingoError.invalidSettings(
+            present(MLingoError.invalidSettings(
                 validation.firstError ?? "Review Settings before saving."
-            ).localizedDescription
+            ))
             return false
         }
 
@@ -198,7 +205,7 @@ final class MLingoViewModel {
             }
         } catch {
             credentialState = previousCredentialState
-            lastError = error.localizedDescription
+            present(error)
             return false
         }
 
@@ -230,7 +237,7 @@ final class MLingoViewModel {
                     )
                 }
             }
-            lastError = error.localizedDescription
+            present(error)
             return false
         }
 
@@ -242,7 +249,7 @@ final class MLingoViewModel {
         settings = normalizedSettings
         whisperDiagnostics.modelID = normalizedSettings.whisperModel
         status = "Settings saved"
-        lastError = nil
+        clearError()
         return true
     }
 
@@ -299,14 +306,14 @@ final class MLingoViewModel {
     func start() {
         let validation = AppSettingsValidation(settings: settings)
         guard validation.isValid else {
-            lastError = MLingoError.invalidSettings(
+            present(MLingoError.invalidSettings(
                 validation.firstError ?? "Review Settings before starting translation."
-            ).localizedDescription
+            ))
             status = "Settings need attention"
             return
         }
         guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            lastError = MLingoError.missingAPIKey.localizedDescription
+            present(.missingAPIKey)
             status = "Settings need attention"
             return
         }
@@ -316,6 +323,28 @@ final class MLingoViewModel {
     func stop() {
         guard activeMode == .translation else { return }
         stopActiveMode(statusAfterStop: "Stopped")
+    }
+
+    func stopCurrentActivity() {
+        switch activeMode {
+        case .idle:
+            break
+        case .soundTest:
+            stopSoundTest()
+        case .transcriptionTest:
+            stopTranscriptionTest()
+        case .translation:
+            stop()
+        }
+    }
+
+    func toggleOverlayVisibility() {
+        guard isRunning else { return }
+        setOverlayVisible(!overlayPresentationState.isVisible)
+    }
+
+    func dismissError() {
+        clearError()
     }
 
     func setOverlayVisible(_ isVisible: Bool) {
@@ -358,7 +387,7 @@ final class MLingoViewModel {
         activeSessionID = sessionID
         activeMode = .soundTest
         status = "Testing system audio"
-        lastError = nil
+        clearError()
         lastWarning = nil
         audioDiagnostics = AudioCaptureDiagnostics(state: .requestingPermission)
 
@@ -387,7 +416,7 @@ final class MLingoViewModel {
                 }
             } catch {
                 guard isCurrentSession(sessionID, mode: .soundTest) else { return }
-                lastError = error.localizedDescription
+                present(error)
                 status = "Sound test needs attention"
                 await finishActiveMode(statusAfterStop: nil)
             }
@@ -408,7 +437,7 @@ final class MLingoViewModel {
         activeSessionID = sessionID
         activeMode = viewMode
         status = "Saving settings"
-        lastError = nil
+        clearError()
         lastWarning = nil
         transcriptionEntries = []
         performanceDiagnostics = PipelinePerformanceDiagnostics()
@@ -430,12 +459,10 @@ final class MLingoViewModel {
 
             let started = await pipeline.start(
                 mode: mode,
-                onError: { [weak self, sessionID] message in
-                    Task { @MainActor in
-                        guard self?.activeSessionID == sessionID else { return }
-                        self?.lastError = message
-                        self?.status = "Needs attention"
-                    }
+                onError: { [weak self, sessionID] error in
+                    guard self?.activeSessionID == sessionID else { return }
+                    self?.present(error)
+                    self?.status = "Needs attention"
                 },
                 onWarning: { [weak self, sessionID] message in
                     Task { @MainActor in
@@ -505,6 +532,7 @@ final class MLingoViewModel {
         guard activeSessionID == finishingSessionID else { return }
         activeSessionID = UUID()
         activeMode = .idle
+        errorRecoveryActions.removeAll { $0 == .stopTranslation }
 
         if let statusAfterStop {
             status = statusAfterStop
@@ -542,6 +570,36 @@ final class MLingoViewModel {
         } else {
             try apiKeyStore.saveAPIKey(value)
         }
+    }
+
+    private func present(_ error: any Error) {
+        if let error = error as? MLingoError {
+            present(error)
+        } else {
+            presentMessage(error.localizedDescription)
+        }
+    }
+
+    private func present(_ error: MLingoError) {
+        let presentation = AppIssuePresentation(
+            error: error,
+            isTranslationActive: isRunning
+        )
+        lastError = presentation.message
+        errorRecoveryActions = presentation.actions
+    }
+
+    private func presentMessage(
+        _ message: String,
+        actions: [AppRecoveryAction] = [.dismiss]
+    ) {
+        lastError = message
+        errorRecoveryActions = actions
+    }
+
+    private func clearError() {
+        lastError = nil
+        errorRecoveryActions = []
     }
 }
 

@@ -11,6 +11,12 @@ Icon?
 Packages/
 Package.pins
 
+# Swift compiler intermediates accidentally emitted at the repository root
+/*.d
+/*.dia
+/*.swiftdeps
+/*.swiftmodule
+
 # Xcode
 DerivedData/
 build/

@@ -67,7 +67,7 @@ func pipelineUsesCaptureBackendFromSettings() async {
 @Test @MainActor
 func pipelineReportsAudioStartupFailure() async {
     let audio = PipelineAudioEngine(startError: MLingoError.noAudioSource)
-    let errors = PipelineMessageRecorder()
+    let errors = PipelineErrorRecorder()
     let pipeline = SubtitlePipeline(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: PipelineWhisperEngine(text: "unused"),
@@ -82,7 +82,19 @@ func pipelineReportsAudioStartupFailure() async {
     )
 
     #expect(!started)
-    #expect(errors.latest == MLingoError.noAudioSource.localizedDescription)
+    #expect(errors.latest == .noAudioSource)
+}
+
+@Test @MainActor
+func pipelineErrorHandlerRunsOnMainActor() {
+    let errors = PipelineMainActorErrorRecorder()
+    let handler: SubtitlePipeline.ErrorHandler = { error in
+        errors.append(error)
+    }
+
+    handler(.noAudioSource)
+
+    #expect(errors.latest == .noAudioSource)
 }
 
 @Test @MainActor
@@ -396,7 +408,7 @@ func translationWorkerDropsOldestPendingRequestsWhenQueueIsFull() async throws {
 func permanentTranslationFailurePausesOnlyTranslationBranch() async throws {
     let audio = PipelineAudioEngine()
     let translation = FailingPipelineTranslationEngine(error: MLingoError.invalidAPIKey)
-    let errors = PipelineMessageRecorder()
+    let errors = PipelineErrorRecorder()
     let transcripts = PipelineTranscriptRecorder()
     let pipeline = SubtitlePipeline(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
@@ -776,6 +788,26 @@ private final class PipelineMessageRecorder: @unchecked Sendable {
 
     func append(_ message: String) {
         lock.withLock { values.append(message) }
+    }
+}
+
+private final class PipelineErrorRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [MLingoError] = []
+    var count: Int { lock.withLock { values.count } }
+    var latest: MLingoError? { lock.withLock { values.last } }
+
+    func append(_ error: MLingoError) {
+        lock.withLock { values.append(error) }
+    }
+}
+
+@MainActor
+private final class PipelineMainActorErrorRecorder {
+    private(set) var latest: MLingoError?
+
+    func append(_ error: MLingoError) {
+        latest = error
     }
 }
 
