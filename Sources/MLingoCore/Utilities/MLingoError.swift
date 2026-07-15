@@ -19,6 +19,7 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
     case translationServiceUnavailable
     case translationInputTooLong(maxCharacters: Int)
     case invalidTranslationConfiguration(String)
+    case invalidSettings(String)
     case translationRequestRejected(String)
     case translationFailed(String)
     case invalidResponse
@@ -61,6 +62,8 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
             "The transcript is too long to translate safely (maximum \(maxCharacters) characters)."
         case .invalidTranslationConfiguration(let message):
             message
+        case .invalidSettings(let message):
+            message
         case .translationRequestRejected(let message):
             message
         case .translationFailed(let message):
@@ -79,6 +82,7 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
              .networkOffline,
              .translationInputTooLong,
              .invalidTranslationConfiguration,
+             .invalidSettings,
              .translationRequestRejected:
             true
         default:

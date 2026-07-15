@@ -19,17 +19,29 @@ public final class UserDefaultsSettingsStore: SettingsStoreProtocol, @unchecked 
             return AppSettings()
         }
 
-        var settings = try decoder.decode(AppSettings.self, from: data)
-        if settings.whisperModel == "mlx-community/whisper-small" {
-            settings.whisperModel = "mlx-community/whisper-small-mlx"
-            defaults.set(try encoder.encode(settings), forKey: key)
+        do {
+            var settings = try decoder.decode(AppSettings.self, from: data)
+            if settings.whisperModel == "mlx-community/whisper-small" {
+                settings.whisperModel = "mlx-community/whisper-small-mlx"
+            }
+            let normalized = AppSettingsValidation(settings: settings).normalizedSettings
+            defaults.set(try encoder.encode(normalized), forKey: key)
+            return normalized
+        } catch {
+            defaults.removeObject(forKey: key)
+            MLingoLogger.settings.warning("Discarded malformed persisted settings")
+            return AppSettings()
         }
-
-        return settings
     }
 
     public func save(_ settings: AppSettings) async throws {
-        let data = try encoder.encode(settings)
+        let validation = AppSettingsValidation(settings: settings)
+        guard validation.isValid else {
+            throw MLingoError.invalidSettings(
+                validation.firstError ?? "Review the settings and try again."
+            )
+        }
+        let data = try encoder.encode(validation.normalizedSettings)
         defaults.set(data, forKey: key)
     }
 }
