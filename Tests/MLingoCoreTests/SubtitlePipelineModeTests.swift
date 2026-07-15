@@ -67,7 +67,7 @@ func pipelineUsesCaptureBackendFromSettings() async {
 @Test @MainActor
 func pipelineReportsAudioStartupFailure() async {
     let audio = PipelineAudioEngine(startError: MLingoError.noAudioSource)
-    let errors = PipelineMessageRecorder()
+    let errors = PipelineErrorRecorder()
     let pipeline = SubtitlePipeline(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: PipelineWhisperEngine(text: "unused"),
@@ -82,7 +82,19 @@ func pipelineReportsAudioStartupFailure() async {
     )
 
     #expect(!started)
-    #expect(errors.latest == MLingoError.noAudioSource.localizedDescription)
+    #expect(errors.latest == .noAudioSource)
+}
+
+@Test @MainActor
+func pipelineErrorHandlerRunsOnMainActor() {
+    let errors = PipelineMainActorErrorRecorder()
+    let handler: SubtitlePipeline.ErrorHandler = { error in
+        errors.append(error)
+    }
+
+    handler(.noAudioSource)
+
+    #expect(errors.latest == .noAudioSource)
 }
 
 @Test @MainActor
@@ -113,6 +125,87 @@ func translationModePreservesTranslationAndOverlayFlow() async throws {
     #expect(await translation.callCount == 1)
     #expect(overlay.showCount == 1)
     #expect(overlay.lastSubtitle?.original == "Translate this")
+    await pipeline.stop()
+    #expect(overlay.hideCount == 1)
+}
+
+@Test @MainActor
+func performanceDiagnosticsCompleteAndRemainAvailableAfterTranslationStops() async throws {
+    let audio = PipelineAudioEngine()
+    let overlay = PipelineOverlayEngine()
+    let recorder = PipelinePerformanceRecorder()
+    let pipeline = SubtitlePipeline(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: PipelineWhisperEngine(text: "Measured transcript"),
+        translationEngine: PipelineTranslationEngine(),
+        overlayEngine: overlay,
+        settingsStore: PipelineSettingsStore()
+    )
+
+    await pipeline.start(
+        mode: .translation,
+        onError: { _ in },
+        onPerformanceDiagnostics: { diagnostics in
+            await recorder.append(diagnostics)
+        }
+    )
+    audio.yield(pipelineAudioChunk(timestamp: 4))
+
+    try await pipelineEventually(timeout: .seconds(2)) {
+        await recorder.latest.totalLatency.sampleCount == 1
+    }
+    let completed = await recorder.latest
+    #expect(completed.whisperDecodeLatency.sampleCount == 1)
+    #expect(completed.translationRequestLatency.sampleCount == 1)
+    #expect(completed.overlayRenderLatency.sampleCount == 1)
+    #expect(completed.totalLatency.latest != nil)
+    #expect(completed.residentMemoryBytes != nil)
+
+    await pipeline.stop()
+    let stopped = await recorder.latest
+    #expect(stopped.totalLatency == completed.totalLatency)
+    #expect(stopped.whisperDecodeLatency == completed.whisperDecodeLatency)
+    #expect(stopped.translationRequestLatency == completed.translationRequestLatency)
+    #expect(stopped.overlayRenderLatency == completed.overlayRenderLatency)
+    #expect(stopped.sessionDuration >= completed.sessionDuration)
+}
+
+@Test @MainActor
+func pipelineProxiesOverlayCommandsOnlyDuringTranslationSession() async {
+    let audio = PipelineAudioEngine()
+    let overlay = PipelineOverlayEngine()
+    let settings = AppSettings(
+        subtitleFontSize: 32,
+        subtitleBackgroundOpacity: 0.72
+    )
+    let pipeline = SubtitlePipeline(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: PipelineWhisperEngine(text: "unused"),
+        translationEngine: PipelineTranslationEngine(),
+        overlayEngine: overlay,
+        settingsStore: PipelineSettingsStore(settings: settings)
+    )
+
+    pipeline.setOverlayVisible(false)
+    pipeline.beginOverlayRepositioning()
+    pipeline.endOverlayRepositioning()
+    pipeline.resetOverlayPosition()
+    pipeline.selectOverlayDisplay(.display(id: "external"))
+
+    #expect(overlay.commandCount == 1)
+
+    let started = await pipeline.start(mode: .translation, onError: { _ in })
+    #expect(started)
+    #expect(overlay.lastShownSettings == settings)
+
+    pipeline.setOverlayVisible(false)
+    pipeline.beginOverlayRepositioning()
+    pipeline.endOverlayRepositioning()
+    pipeline.resetOverlayPosition()
+    pipeline.selectOverlayDisplay(.display(id: "external"))
+
+    #expect(overlay.commandCount == 6)
+
     await pipeline.stop()
     #expect(overlay.hideCount == 1)
 }
@@ -237,6 +330,36 @@ func translationWorkerSuppressesOnlyAdjacentDuplicateCandidates() async throws {
 }
 
 @Test @MainActor
+func performanceDiagnosticsCountAdjacentTranslationDuplicates() async throws {
+    let audio = PipelineAudioEngine()
+    let translation = PipelineTranslationEngine()
+    let recorder = PipelinePerformanceRecorder()
+    let pipeline = SubtitlePipeline(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: PipelineScriptedWhisperEngine(texts: ["Same line", "Same line"]),
+        translationEngine: translation,
+        overlayEngine: PipelineOverlayEngine(),
+        settingsStore: PipelineSettingsStore()
+    )
+
+    await pipeline.start(
+        mode: .translation,
+        onError: { _ in },
+        onPerformanceDiagnostics: { await recorder.append($0) }
+    )
+    audio.yield(pipelineAudioChunk(timestamp: 0))
+    try await pipelineEventually { await translation.callCount == 1 }
+    audio.yield(pipelineAudioChunk(timestamp: 6))
+
+    try await pipelineEventually(timeout: .seconds(2)) {
+        await recorder.latest.duplicateTranslationCount == 1
+    }
+    #expect(await translation.callCount == 1)
+    #expect(await recorder.latest.totalLatency.sampleCount == 1)
+    await pipeline.stop()
+}
+
+@Test @MainActor
 func translationWorkerDropsOldestPendingRequestsWhenQueueIsFull() async throws {
     let audio = PipelineAudioEngine()
     let texts = [
@@ -247,6 +370,7 @@ func translationWorkerDropsOldestPendingRequestsWhenQueueIsFull() async throws {
     let translation = BlockingPipelineTranslationEngine()
     let warnings = PipelineMessageRecorder()
     let transcripts = PipelineTranscriptRecorder()
+    let performance = PipelinePerformanceRecorder()
     let pipeline = SubtitlePipeline(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: PipelineScriptedWhisperEngine(texts: texts),
@@ -259,7 +383,8 @@ func translationWorkerDropsOldestPendingRequestsWhenQueueIsFull() async throws {
         mode: .translation,
         onError: { _ in },
         onWarning: { message in warnings.append(message) },
-        onTranscript: { transcript in await transcripts.append(transcript) }
+        onTranscript: { transcript in await transcripts.append(transcript) },
+        onPerformanceDiagnostics: { await performance.append($0) }
     )
     for index in texts.indices {
         audio.yield(pipelineAudioChunk(timestamp: TimeInterval(index * 3)))
@@ -273,6 +398,9 @@ func translationWorkerDropsOldestPendingRequestsWhenQueueIsFull() async throws {
     await translation.releaseFirst()
     try await pipelineEventually { await translation.callCount == 9 }
     #expect(await translation.originalTexts == ["Alpha orchard"] + Array(texts[3...]))
+    try await pipelineEventually(timeout: .seconds(2)) {
+        await performance.latest.skippedTranslationCount == 2
+    }
     await pipeline.stop()
 }
 
@@ -280,7 +408,7 @@ func translationWorkerDropsOldestPendingRequestsWhenQueueIsFull() async throws {
 func permanentTranslationFailurePausesOnlyTranslationBranch() async throws {
     let audio = PipelineAudioEngine()
     let translation = FailingPipelineTranslationEngine(error: MLingoError.invalidAPIKey)
-    let errors = PipelineMessageRecorder()
+    let errors = PipelineErrorRecorder()
     let transcripts = PipelineTranscriptRecorder()
     let pipeline = SubtitlePipeline(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
@@ -583,19 +711,53 @@ private actor FailingPipelineTranslationEngine: TranslationEngineProtocol {
 
 @MainActor
 private final class PipelineOverlayEngine: OverlayEngineProtocol {
+    let presentationState = OverlayPresentationState()
     private(set) var showCount = 0
     private(set) var updateCount = 0
     private(set) var hideCount = 0
+    private(set) var commandCount = 0
     private(set) var lastSubtitle: SubtitleItem?
+    private(set) var lastShownSettings: AppSettings?
 
-    func show() { showCount += 1 }
+    func show(settings: AppSettings) {
+        showCount += 1
+        lastShownSettings = settings
+        presentationState.isVisible = true
+    }
 
     func update(with subtitle: SubtitleItem, settings: AppSettings) {
         updateCount += 1
         lastSubtitle = subtitle
     }
 
-    func hide() { hideCount += 1 }
+    func hide() {
+        hideCount += 1
+        presentationState.isVisible = false
+        presentationState.isEditing = false
+    }
+
+    func setVisible(_ isVisible: Bool) {
+        commandCount += 1
+        presentationState.isVisible = isVisible
+    }
+
+    func beginRepositioning() {
+        commandCount += 1
+        presentationState.isVisible = true
+        presentationState.isEditing = true
+    }
+
+    func endRepositioning() {
+        commandCount += 1
+        presentationState.isEditing = false
+    }
+
+    func resetPosition() { commandCount += 1 }
+
+    func selectDisplay(_ selection: OverlayDisplaySelection) {
+        commandCount += 1
+        presentationState.selectedDisplay = selection
+    }
 }
 
 private actor PipelineSettingsStore: SettingsStoreProtocol {
@@ -629,12 +791,43 @@ private final class PipelineMessageRecorder: @unchecked Sendable {
     }
 }
 
+private final class PipelineErrorRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [MLingoError] = []
+    var count: Int { lock.withLock { values.count } }
+    var latest: MLingoError? { lock.withLock { values.last } }
+
+    func append(_ error: MLingoError) {
+        lock.withLock { values.append(error) }
+    }
+}
+
+@MainActor
+private final class PipelineMainActorErrorRecorder {
+    private(set) var latest: MLingoError?
+
+    func append(_ error: MLingoError) {
+        latest = error
+    }
+}
+
 private actor PipelineDiagnosticsRecorder {
     private var values: [WhisperDiagnostics] = []
     var count: Int { values.count }
     var latest: WhisperDiagnostics { values.last ?? WhisperDiagnostics() }
 
     func append(_ diagnostics: WhisperDiagnostics) {
+        values.append(diagnostics)
+    }
+}
+
+private actor PipelinePerformanceRecorder {
+    private var values: [PipelinePerformanceDiagnostics] = []
+    var latest: PipelinePerformanceDiagnostics {
+        values.last ?? PipelinePerformanceDiagnostics()
+    }
+
+    func append(_ diagnostics: PipelinePerformanceDiagnostics) {
         values.append(diagnostics)
     }
 }

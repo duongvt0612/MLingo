@@ -1,5 +1,15 @@
 import Foundation
 
+struct CapturedAudioChunk: Sendable {
+    let chunk: AudioChunk
+    let capturedAt: PerformanceInstant
+}
+
+struct TracedAudioWindow: Sendable {
+    let chunk: AudioChunk
+    let speechEnd: PerformanceInstant?
+}
+
 struct AdaptiveAudioWindowConfiguration: Equatable, Sendable {
     let minimumSpeechDuration: TimeInterval
     let preferredWindowDuration: TimeInterval
@@ -33,9 +43,16 @@ struct AdaptiveAudioWindowConfiguration: Equatable, Sendable {
 }
 
 struct AdaptiveAudioWindowAccumulator: Sendable {
+    private struct CaptureSpan: Sendable {
+        var sampleCount: Int
+        let isSpeechLike: Bool
+        let capturedAt: PerformanceInstant?
+    }
+
     private let configuration: AdaptiveAudioWindowConfiguration
     private var samples: [Float] = []
     private var speechFlags: [Bool] = []
+    private var captureSpans: [CaptureSpan] = []
     private var sampleRate: Double = 16_000
     private var channelCount = 1
     private var startTimestamp: TimeInterval = 0
@@ -55,6 +72,13 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
     }
 
     mutating func append(_ chunk: AudioChunk) -> [AudioChunk] {
+        appendTraced(chunk, capturedAt: nil).map(\.chunk)
+    }
+
+    mutating func appendTraced(
+        _ chunk: AudioChunk,
+        capturedAt: PerformanceInstant?
+    ) -> [TracedAudioWindow] {
         guard chunk.sampleRate > 0, chunk.channelCount == 1, !chunk.samples.isEmpty else {
             return []
         }
@@ -77,6 +101,13 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
         speechFlags.append(
             contentsOf: repeatElement(chunk.isSpeechLike, count: chunk.samples.count)
         )
+        captureSpans.append(
+            CaptureSpan(
+                sampleCount: chunk.samples.count,
+                isSpeechLike: chunk.isSpeechLike,
+                capturedAt: capturedAt
+            )
+        )
 
         let preferredSampleCount = Int((configuration.preferredWindowDuration * sampleRate).rounded())
         let maximumSampleCount = Int((configuration.maximumWindowDuration * sampleRate).rounded())
@@ -85,7 +116,7 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
             1,
             Int((configuration.minimumQuietBoundaryDuration * sampleRate).rounded())
         )
-        var windows: [AudioChunk] = []
+        var windows: [TracedAudioWindow] = []
 
         while preferredSampleCount > 0, samples.count >= preferredSampleCount {
             if let boundarySampleCount = quietBoundarySampleCount(
@@ -94,9 +125,10 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
                 minimumQuietSampleCount: minimumQuietSampleCount
             ) {
                 windows.append(
-                    makeChunk(
+                    makeTracedWindow(
                         samples: Array(samples.prefix(boundarySampleCount)),
-                        timestamp: startTimestamp
+                        timestamp: startTimestamp,
+                        sampleCount: boundarySampleCount
                     )
                 )
                 removeFirst(boundarySampleCount)
@@ -115,9 +147,10 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
             }
 
             windows.append(
-                makeChunk(
+                makeTracedWindow(
                     samples: Array(samples.prefix(maximumSampleCount)),
-                    timestamp: startTimestamp
+                    timestamp: startTimestamp,
+                    sampleCount: maximumSampleCount
                 )
             )
 
@@ -146,6 +179,10 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
     }
 
     mutating func flushForSilence() -> AudioChunk? {
+        flushForSilenceTraced()?.chunk
+    }
+
+    mutating func flushForSilenceTraced() -> TracedAudioWindow? {
         defer { reset() }
         let newSpeechSampleCount = speechFlags
             .dropFirst(retainedOverlapSampleCount)
@@ -157,12 +194,17 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
             return nil
         }
 
-        return makeChunk(samples: samples, timestamp: startTimestamp)
+        return makeTracedWindow(
+            samples: samples,
+            timestamp: startTimestamp,
+            sampleCount: samples.count
+        )
     }
 
     mutating func reset() {
         samples.removeAll(keepingCapacity: true)
         speechFlags.removeAll(keepingCapacity: true)
+        captureSpans.removeAll(keepingCapacity: true)
         startTimestamp = 0
         retainedOverlapSampleCount = 0
     }
@@ -224,16 +266,46 @@ struct AdaptiveAudioWindowAccumulator: Sendable {
     private mutating func removeFirst(_ count: Int) {
         samples.removeFirst(count)
         speechFlags.removeFirst(count)
+        var remaining = count
+        while remaining > 0, !captureSpans.isEmpty {
+            if captureSpans[0].sampleCount <= remaining {
+                remaining -= captureSpans[0].sampleCount
+                captureSpans.removeFirst()
+            } else {
+                captureSpans[0].sampleCount -= remaining
+                remaining = 0
+            }
+        }
         startTimestamp += Double(count) / sampleRate
     }
 
-    private func makeChunk(samples: [Float], timestamp: TimeInterval) -> AudioChunk {
-        AudioChunk(
-            samples: samples,
-            sampleRate: sampleRate,
-            channelCount: channelCount,
-            timestamp: timestamp,
-            duration: Double(samples.count) / sampleRate
+    private func makeTracedWindow(
+        samples: [Float],
+        timestamp: TimeInterval,
+        sampleCount: Int
+    ) -> TracedAudioWindow {
+        TracedAudioWindow(
+            chunk: AudioChunk(
+                samples: samples,
+                sampleRate: sampleRate,
+                channelCount: channelCount,
+                timestamp: timestamp,
+                duration: Double(samples.count) / sampleRate
+            ),
+            speechEnd: lastSpeechCaptureInstant(inFirst: sampleCount)
         )
+    }
+
+    private func lastSpeechCaptureInstant(inFirst sampleCount: Int) -> PerformanceInstant? {
+        var remaining = sampleCount
+        var lastSpeechInstant: PerformanceInstant?
+        for span in captureSpans where remaining > 0 {
+            let includedCount = min(remaining, span.sampleCount)
+            if includedCount > 0, span.isSpeechLike, let capturedAt = span.capturedAt {
+                lastSpeechInstant = capturedAt
+            }
+            remaining -= includedCount
+        }
+        return lastSpeechInstant
     }
 }

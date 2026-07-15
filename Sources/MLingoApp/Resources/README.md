@@ -1,5 +1,5 @@
-# MLingo App Metadata
+# MLingo app resources
 
-`Info.plist` and `MLingo.entitlements` are included for the macOS app target when this Swift package is opened in Xcode or wrapped in an archive target.
+`Info.plist`, `MLingo.entitlements`, and `Assets.xcassets` belong to the native `MLingo` application target in `MLingo.xcodeproj`.
 
-The SwiftPM executable target is used for compile and test validation. A real Xcode project/archive target should be created later for release packaging; do not use a hand-written fake `.xcodeproj`.
+The SwiftPM executable target remains available for compile and test compatibility. It is not the release bundle; use the shared Xcode scheme or `scripts/build-local-rc.sh` when MLX Metal resources must be packaged.

@@ -1,10 +1,11 @@
+import AppKit
 import MLingoCore
 import SwiftUI
 
 struct ContentView: View {
     @Bindable var viewModel: MLingoViewModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openSettings) private var openSettings
+    @State private var diagnosticsExpanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -39,6 +40,8 @@ struct ContentView: View {
             }
             .accessibilityLabel("Open settings")
 
+            overlayMenu
+
             Button {
                 viewModel.isTestingSound ? viewModel.stopSoundTest() : viewModel.startSoundTest()
             } label: {
@@ -56,7 +59,6 @@ struct ContentView: View {
                     .frame(minWidth: 128)
             }
             .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.return, modifiers: [.command])
             .disabled(viewModel.isActive && !viewModel.isRunning)
             .accessibilityLabel(viewModel.isRunning ? "Stop live translation" : "Start live translation")
         }
@@ -64,6 +66,76 @@ struct ContentView: View {
         .padding(.leading, 84)
         .padding(.trailing, 24)
         .padding(.bottom, 16)
+    }
+
+    private var overlayMenu: some View {
+        let state = viewModel.overlayPresentationState
+
+        return Menu {
+            Button {
+                viewModel.setOverlayVisible(!state.isVisible)
+            } label: {
+                Label(
+                    state.isVisible ? "Hide Overlay" : "Show Overlay",
+                    systemImage: state.isVisible ? "eye.slash" : "eye"
+                )
+            }
+
+            Button {
+                viewModel.beginOverlayRepositioning()
+            } label: {
+                Label("Reposition Overlay", systemImage: "arrow.up.and.down.and.arrow.left.and.right")
+            }
+            .disabled(state.isEditing)
+
+            Button {
+                viewModel.resetOverlayPosition()
+            } label: {
+                Label("Reset Position", systemImage: "arrow.counterclockwise")
+            }
+
+            Divider()
+
+            Menu("Move to Display") {
+                overlayDisplayButton(
+                    title: "Automatic",
+                    selection: .automatic,
+                    currentSelection: state.selectedDisplay
+                )
+
+                ForEach(state.availableDisplays) { display in
+                    overlayDisplayButton(
+                        title: display.name,
+                        selection: .display(id: display.id),
+                        currentSelection: state.selectedDisplay
+                    )
+                }
+            }
+        } label: {
+            Label("Overlay", systemImage: "captions.bubble")
+        }
+        .disabled(!viewModel.isRunning)
+        .accessibilityLabel("Overlay controls")
+        .accessibilityHint("Show, reposition, reset, or move the subtitle overlay")
+    }
+
+    private func overlayDisplayButton(
+        title: String,
+        selection: OverlayDisplaySelection,
+        currentSelection: OverlayDisplaySelection
+    ) -> some View {
+        Button {
+            viewModel.selectOverlayDisplay(selection)
+        } label: {
+            if selection == currentSelection {
+                Label(title, systemImage: "checkmark")
+            } else {
+                Text(title)
+            }
+        }
+        .accessibilityLabel(
+            selection == currentSelection ? "\(title), selected" : title
+        )
     }
 
     private var mainContent: some View {
@@ -78,9 +150,16 @@ struct ContentView: View {
     private var statusPanel: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack(alignment: .center, spacing: 12) {
-                Label(viewModel.status, systemImage: statusIconName)
+                HStack(spacing: 9) {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 10, height: 10)
+                        .accessibilityHidden(true)
+                    Text(viewModel.status)
+                }
                     .font(.title3.weight(.semibold))
-                    .symbolEffect(.pulse, options: reduceMotion ? .nonRepeating : .repeating, value: viewModel.isActive)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Status: \(viewModel.status)")
 
                 Spacer()
 
@@ -93,13 +172,7 @@ struct ContentView: View {
             }
 
             if let lastError = viewModel.lastError {
-                Text(lastError)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-                    .padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-                    .accessibilityLabel("Error: \(lastError)")
+                errorBanner(lastError)
             } else if let lastWarning = viewModel.lastWarning {
                 Label(lastWarning, systemImage: "exclamationmark.triangle")
                     .font(.callout)
@@ -116,15 +189,68 @@ struct ContentView: View {
 
             readinessGrid
 
-            audioDiagnosticsPanel
-
-            Divider()
-
-            transcriptionDiagnosticsPanel
+            DisclosureGroup(isExpanded: $diagnosticsExpanded) {
+                VStack(alignment: .leading, spacing: 18) {
+                    audioDiagnosticsPanel
+                    Divider()
+                    transcriptionDiagnosticsPanel
+                    Divider()
+                    performanceDiagnosticsPanel
+                }
+                .padding(.top, 14)
+            } label: {
+                Label("Diagnostics", systemImage: "stethoscope")
+                    .font(.headline)
+            }
+            .accessibilityLabel("Audio, transcription, and performance diagnostics")
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .font(.callout)
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !viewModel.errorRecoveryActions.isEmpty {
+                HStack(spacing: 8) {
+                    ForEach(viewModel.errorRecoveryActions, id: \.self) { action in
+                        Button(action.label) {
+                            performRecovery(action)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Error: \(message)")
+    }
+
+    private func performRecovery(_ action: AppRecoveryAction) {
+        switch action {
+        case .openSettings:
+            openSettings()
+        case .openSystemSettings:
+            NSWorkspace.shared.open(
+                URL(fileURLWithPath: "/System/Applications/System Settings.app")
+            )
+        case .openOpenAIUsage:
+            guard let url = URL(string: "https://platform.openai.com/usage") else { return }
+            NSWorkspace.shared.open(url)
+        case .stopTranslation:
+            viewModel.stop()
+        case .dismiss:
+            viewModel.dismissError()
+        }
     }
 
     private var readinessGrid: some View {
@@ -307,6 +433,92 @@ struct ContentView: View {
         )
     }
 
+    private var performanceDiagnosticsPanel: some View {
+        let diagnostics = viewModel.performanceDiagnostics
+        let total = diagnostics.totalLatency
+        let isCollecting = viewModel.isRunning || viewModel.isTestingTranscription
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Performance diagnostics", systemImage: "gauge.with.dots.needle.50percent")
+                    .font(.headline)
+                Spacer()
+                Text(
+                    total.sampleCount > 0
+                        ? "\(total.sampleCount) samples"
+                        : (isCollecting ? "Collecting…" : "Not active")
+                )
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 125), alignment: .leading)],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                diagnosticMetric("Total latest", formattedLatency(total.latest))
+                diagnosticMetric("Total p50", formattedLatency(total.p50))
+                diagnosticMetric("Total p95", formattedLatency(total.p95))
+                diagnosticMetric("Session", formattedDuration(diagnostics.sessionDuration))
+            }
+
+            Divider()
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 125), alignment: .leading)],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                diagnosticMetric(
+                    "Audio/backlog",
+                    formattedLatency(diagnostics.audioToWhisperLatency.latest)
+                )
+                diagnosticMetric(
+                    "Whisper",
+                    formattedLatency(diagnostics.whisperDecodeLatency.latest)
+                )
+                diagnosticMetric(
+                    "Translation queue",
+                    formattedLatency(diagnostics.translationQueueLatency.latest)
+                )
+                diagnosticMetric(
+                    "OpenAI request",
+                    formattedLatency(diagnostics.translationRequestLatency.latest)
+                )
+                diagnosticMetric(
+                    "Overlay render",
+                    formattedLatency(diagnostics.overlayRenderLatency.latest)
+                )
+            }
+
+            Divider()
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 125), alignment: .leading)],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                diagnosticMetric(
+                    "Whisper pending",
+                    formattedLatency(diagnostics.whisperPendingAudioDuration)
+                )
+                diagnosticMetric(
+                    "Translation queue",
+                    "\(diagnostics.translationQueueDepth) / peak \(diagnostics.peakTranslationQueueDepth)"
+                )
+                diagnosticMetric("Whisper dropped", "\(diagnostics.droppedWhisperWindowCount)")
+                diagnosticMetric("Translation skipped", "\(diagnostics.skippedTranslationCount)")
+                diagnosticMetric("Duplicates", "\(diagnostics.duplicateTranslationCount)")
+                diagnosticMetric("CPU", formattedCPU(diagnostics.cpuUsagePercent))
+                diagnosticMetric("RSS", formattedMemory(diagnostics.residentMemoryBytes))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Performance diagnostics")
+    }
+
     private var transcriptionResultPlaceholder: String {
         switch viewModel.activeMode {
         case .transcriptionTest:
@@ -347,14 +559,14 @@ struct ContentView: View {
         viewModel.audioDiagnostics.state == .running
     }
 
-    private var statusIconName: String {
-        if viewModel.isActive {
-            return "waveform"
-        }
+    private var statusColor: Color {
         if viewModel.lastError != nil {
-            return "exclamationmark.triangle"
+            return .red
         }
-        return "checkmark.circle"
+        if viewModel.isActive {
+            return .green
+        }
+        return .secondary
     }
 
     private var modeLabel: String {
@@ -411,6 +623,36 @@ struct ContentView: View {
                 .font(.caption.monospacedDigit().weight(.medium))
                 .textSelection(.enabled)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(title)
+        .accessibilityValue(value)
+    }
+
+    private func formattedLatency(_ latency: TimeInterval?) -> String {
+        guard let latency, latency.isFinite else { return "—" }
+        if latency < 1 {
+            return "\(Int((latency * 1_000).rounded())) ms"
+        }
+        return latency.formatted(.number.precision(.fractionLength(2))) + " s"
+    }
+
+    private func formattedLatency(_ latency: TimeInterval) -> String {
+        formattedLatency(Optional(latency))
+    }
+
+    private func formattedCPU(_ cpuPercent: Double?) -> String {
+        guard let cpuPercent, cpuPercent.isFinite else { return "—" }
+        return cpuPercent.formatted(.number.precision(.fractionLength(1))) + "%"
+    }
+
+    private func formattedMemory(_ bytes: UInt64?) -> String {
+        guard let bytes else { return "—" }
+        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .memory)
+    }
+
+    private func formattedDuration(_ duration: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(duration.rounded(.down)))
+        return String(format: "%02d:%02d", totalSeconds / 60, totalSeconds % 60)
     }
 
     private func summarySection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

@@ -2,72 +2,67 @@
 
 ## Mục tiêu
 
-Render phụ đề dịch lên cửa sổ nổi always-on-top, đọc được trên mọi app và không cần focus app MLingo.
+Render phụ đề dịch bằng một `NSPanel` always-on-top, click-through khi xem và có HUD trực tiếp để reposition mà không cần focus lại MLingo khi subtitle cập nhật.
 
-## Trạng thái hiện tại
+## Kết quả triển khai
 
-- [x] Đã có `OverlayEngineProtocol`.
-- [x] Đã có `FloatingSubtitleWindowController` dùng `NSPanel`.
-- [x] Đã có `SubtitleOverlayView` SwiftUI.
-- [x] Đã có font size, opacity, bilingual toggle trong settings model.
-- [ ] Chưa manual test overlay trên app fullscreen.
-- [ ] Chưa lưu vị trí overlay.
-- [ ] Chưa chọn display khi có nhiều màn hình.
+- [x] `FloatingSubtitleWindowController` tạo và tái sử dụng đúng một panel.
+- [x] Start session xóa subtitle cũ; Stop/Hide thoát edit mode, clear nội dung và hide panel.
+- [x] Manual Hide chỉ áp dụng cho session hiện tại; subtitle mới vẫn update state nhưng không tự hiện panel lại.
+- [x] Normal mode dùng `ignoresMouseEvents`; edit mode bật interaction và HUD gồm Done, Reset Position và Display.
+- [x] Header có menu Overlay cho Show/Hide, Reposition, Reset Position và Move to Display; menu chỉ active khi translation đang chạy.
+- [x] `OverlayPresentationState` được dùng chung qua controller, pipeline và ViewModel.
+- [x] Settings/Subtitles có picker Overlay display; draft đồng bộ khi HUD đổi display trong live session.
+- [x] Display preference dùng Core Graphics display UUID, hỗ trợ Automatic theo cửa sổ MLingo và fallback main display.
+- [x] Vị trí được lưu theo từng display dưới dạng normalized center-X/bottom-Y và debounce sau khi kéo.
+- [x] Thay đổi resolution, Dock hoặc menu bar resolve lại theo `visibleFrame` và clamp panel vào màn hình.
+- [x] Display bị disconnect fallback sang automatic resolution nhưng giữ preferred UUID để dùng lại khi reconnect.
+- [x] Preferences malformed chỉ reset overlay preferences, không ảnh hưởng AppSettings hoặc API key.
+- [x] Kích thước giới hạn ở `min(980 pt, 82% visibleFrame)` và tối đa 40% chiều cao; resize giữ bottom anchor.
+- [x] Translated tối đa 3 dòng, original tối đa 2 dòng, scale factor 0.75; original dùng 58% font size.
+- [x] Text trắng có shadow nhẹ, nền đen dùng opacity setting và không animation khi subtitle đổi.
+- [x] Accessibility label chứa original và translated khi bật bilingual.
 
-## Các bước triển khai
+## Public interfaces
 
-- [x] Tạo `NSPanel` borderless, background trong suốt.
-- [x] Set level `.floating`.
-- [x] Set collection behavior để join spaces và hỗ trợ fullscreen auxiliary.
-- [x] Render subtitle bằng SwiftUI view.
-- [x] Dùng font size và opacity từ settings.
-- [ ] Kiểm tra NSPanel behavior:
-  - Always on top.
-  - Can join all spaces.
-  - Full screen auxiliary.
-  - Không chiếm focus khi update subtitle.
-- [ ] Position:
-  - Mặc định ở đáy màn hình.
-  - Cho user kéo panel.
-  - Lưu vị trí theo display nếu cần.
-- [ ] Multi-display:
-  - Chọn display hiện tại/mặc định.
-  - Nếu video ở display khác, có setting chọn display.
-- [ ] Readability:
-  - Text trắng, shadow/outline.
-  - Nền đen trong suốt có opacity.
-  - Auto resize theo nội dung nhưng không tràn màn hình.
-- [ ] Interaction:
-  - Toggle show/hide overlay.
-  - Không che thao tác app khác quá mức.
-  - Có shortcut start/stop.
-- [ ] Accessibility:
-  - Accessibility label cho subtitle.
-  - Respect reduced motion.
-  - Không dùng animation gây distraction.
+- [x] Thêm `OverlayDisplaySelection`, `OverlayDisplayDescriptor`, `OverlayPlacement`, `OverlayPreferences`, `OverlayPresentationState` và `OverlayPreferencesStoreProtocol`.
+- [x] Mở rộng `OverlayEngineProtocol` với presentation state và các lệnh show/visibility/reposition/reset/display.
+- [x] `SubtitlePipeline` proxy overlay commands và chỉ mở overlay trong translation mode.
+- [x] `MLingoViewModel` expose shared state cùng actions cho Header và Settings.
 
-## Tiêu chí hoàn thành
+## Automated tests
 
-- [ ] Phụ đề hiện trên YouTube/VLC/browser.
-- [ ] Đọc được trên nền sáng và nền tối.
-- [ ] Start/stop không tạo nhiều panel rác.
-- [ ] Kéo panel không crash, update subtitle vẫn đúng.
+- [x] Preferences round-trip và malformed-data fallback.
+- [x] Default placement, normalized round-trip, resolution change và visible-frame clamping.
+- [x] Preferred/Automatic display, disconnect fallback và reconnect.
+- [x] Controller tái sử dụng panel; hidden update không tự hiện lại; session mới không hiện subtitle stale.
+- [x] Normal/edit mouse behavior, Done/Hide cleanup, display selection và dragged placement persistence.
+- [x] Debounced placement không ghi đè display selection mới hơn.
+- [x] Content resize giữ bottom anchor và không vượt visible frame.
+- [x] Pipeline/ViewModel lifecycle, mode guard, shared state và command routing.
 
-## Test bắt buộc
+Validation ngày 2026-07-15:
 
-```bash
-rtk proxy swift test
+```text
+rtk proxy swift test       # 115 tests passed
+rtk proxy swift build      # passed
+rtk proxy git diff --check # passed
 ```
 
-Manual:
+SwiftPM vẫn báo hai warning baseline: dependency `swift-jinja` chưa được target nào dùng và README của `MLXAudioVAD` chưa được khai báo resource/exclude.
 
-- [ ] Mở video fullscreen.
-- [ ] Start MLingo.
-- [ ] Xác nhận overlay nằm trên video.
-- [ ] Đổi font size/opacity trong Settings.
-- [ ] Thử trên display thứ hai nếu có.
+## Manual acceptance còn lại
 
-## Rủi ro
+- [ ] Browser/YouTube và VLC fullscreen.
+- [ ] Click-through normal mode và kéo/HUD edit mode trên app thực.
+- [ ] Video sáng/tối; bilingual; font 18/64; opacity 20/90; subtitle dài.
+- [ ] Keyboard, VoiceOver và reduced motion.
+- [ ] Display thứ hai và disconnect/reconnect với phần cứng thực.
 
-- `NSPanel` behavior trong fullscreen app có thể cần tinh chỉnh collection behavior.
-- Overlay có thể chặn click của app bên dưới nếu `ignoresMouseEvents` không đúng theo mode.
+Các mục manual trên chưa được đánh dấu hoàn thành vì môi trường validation hiện tại không xác nhận fullscreen app, VoiceOver hoặc display vật lý thứ hai.
+
+## Ngoài phạm vi
+
+- Không thêm dependency, localization, overlay preview hoặc global hotkey mới.
+- Overlay không tự dò display chứa video và không follow pointer.
+- Visibility không persist qua session; display preference và vị trí được persist.
