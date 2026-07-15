@@ -248,6 +248,41 @@ func translationStartWithInvalidSettingsStaysIdleAndDoesNotCreateAudio() {
 }
 
 @Test @MainActor
+func invalidSettingsSaveDoesNotTouchPreferencesOrKeychain() async {
+    let settingsStore = AppTestSettingsStore()
+    let keyStore = AppTestAPIKeyStore(storedKey: "sk-old")
+    let viewModel = makeViewModel(settingsStore: settingsStore, keyStore: keyStore) { _ in
+        AppTestTranslationEngine()
+    }
+    await viewModel.load()
+    var invalidSettings = AppSettings()
+    invalidSettings.targetLanguage = "   "
+
+    let saved = await viewModel.save(invalidSettings, apiKey: "sk-new")
+
+    #expect(!saved)
+    #expect(await settingsStore.saveCount == 0)
+    #expect(keyStore.saveCount == 0)
+    #expect(keyStore.deleteCount == 0)
+    #expect(keyStore.currentKey == "sk-old")
+}
+
+@Test @MainActor
+func transcriptionTestStartsWithoutAnAPIKey() async throws {
+    let audioFactory = AppTestAudioFactory()
+    let viewModel = makeViewModel(audioFactory: audioFactory) { _ in
+        AppTestTranslationEngine()
+    }
+
+    viewModel.startTranscriptionTest()
+
+    try await appEventually { viewModel.status == "Testing transcription" }
+    #expect(audioFactory.makeCount == 1)
+    #expect(viewModel.activeMode == .transcriptionTest)
+    viewModel.stopTranscriptionTest()
+}
+
+@Test @MainActor
 func credentialStatusDistinguishesStoredMissingChangedAndFailedStates() async {
     let keyStore = AppTestAPIKeyStore(storedKey: "sk-stored")
     let viewModel = makeViewModel(keyStore: keyStore) { _ in AppTestTranslationEngine() }

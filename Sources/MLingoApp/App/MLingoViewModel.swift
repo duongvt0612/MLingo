@@ -59,6 +59,22 @@ final class MLingoViewModel {
         pipeline.overlayPresentationState
     }
 
+    func credentialStatus(for candidateAPIKey: String) -> CredentialStatus {
+        let candidate = candidateAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard candidate == apiKey else { return .unsavedChange }
+
+        switch credentialState {
+        case .unknown:
+            return .checking
+        case .notStored:
+            return .notSaved
+        case .stored:
+            return .saved
+        case .failed(let message):
+            return .failed(message)
+        }
+    }
+
     private let settingsStore: SettingsStoreProtocol
     private let apiKeyStore: APIKeyStoreProtocol
     private let pipeline: SubtitlePipeline
