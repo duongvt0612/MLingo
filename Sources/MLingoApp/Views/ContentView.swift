@@ -193,6 +193,10 @@ struct ContentView: View {
             Divider()
 
             transcriptionDiagnosticsPanel
+
+            Divider()
+
+            performanceDiagnosticsPanel
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -379,6 +383,92 @@ struct ContentView: View {
         )
     }
 
+    private var performanceDiagnosticsPanel: some View {
+        let diagnostics = viewModel.performanceDiagnostics
+        let total = diagnostics.totalLatency
+        let isCollecting = viewModel.isRunning || viewModel.isTestingTranscription
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Label("Performance diagnostics", systemImage: "gauge.with.dots.needle.50percent")
+                    .font(.headline)
+                Spacer()
+                Text(
+                    total.sampleCount > 0
+                        ? "\(total.sampleCount) samples"
+                        : (isCollecting ? "Collecting…" : "Not active")
+                )
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 125), alignment: .leading)],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                diagnosticMetric("Total latest", formattedLatency(total.latest))
+                diagnosticMetric("Total p50", formattedLatency(total.p50))
+                diagnosticMetric("Total p95", formattedLatency(total.p95))
+                diagnosticMetric("Session", formattedDuration(diagnostics.sessionDuration))
+            }
+
+            Divider()
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 125), alignment: .leading)],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                diagnosticMetric(
+                    "Audio/backlog",
+                    formattedLatency(diagnostics.audioToWhisperLatency.latest)
+                )
+                diagnosticMetric(
+                    "Whisper",
+                    formattedLatency(diagnostics.whisperDecodeLatency.latest)
+                )
+                diagnosticMetric(
+                    "Translation queue",
+                    formattedLatency(diagnostics.translationQueueLatency.latest)
+                )
+                diagnosticMetric(
+                    "OpenAI request",
+                    formattedLatency(diagnostics.translationRequestLatency.latest)
+                )
+                diagnosticMetric(
+                    "Overlay render",
+                    formattedLatency(diagnostics.overlayRenderLatency.latest)
+                )
+            }
+
+            Divider()
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 125), alignment: .leading)],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                diagnosticMetric(
+                    "Whisper pending",
+                    formattedLatency(diagnostics.whisperPendingAudioDuration)
+                )
+                diagnosticMetric(
+                    "Translation queue",
+                    "\(diagnostics.translationQueueDepth) / peak \(diagnostics.peakTranslationQueueDepth)"
+                )
+                diagnosticMetric("Whisper dropped", "\(diagnostics.droppedWhisperWindowCount)")
+                diagnosticMetric("Translation skipped", "\(diagnostics.skippedTranslationCount)")
+                diagnosticMetric("Duplicates", "\(diagnostics.duplicateTranslationCount)")
+                diagnosticMetric("CPU", formattedCPU(diagnostics.cpuUsagePercent))
+                diagnosticMetric("RSS", formattedMemory(diagnostics.residentMemoryBytes))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Performance diagnostics")
+    }
+
     private var transcriptionResultPlaceholder: String {
         switch viewModel.activeMode {
         case .transcriptionTest:
@@ -483,6 +573,36 @@ struct ContentView: View {
                 .font(.caption.monospacedDigit().weight(.medium))
                 .textSelection(.enabled)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(title)
+        .accessibilityValue(value)
+    }
+
+    private func formattedLatency(_ latency: TimeInterval?) -> String {
+        guard let latency, latency.isFinite else { return "—" }
+        if latency < 1 {
+            return "\(Int((latency * 1_000).rounded())) ms"
+        }
+        return latency.formatted(.number.precision(.fractionLength(2))) + " s"
+    }
+
+    private func formattedLatency(_ latency: TimeInterval) -> String {
+        formattedLatency(Optional(latency))
+    }
+
+    private func formattedCPU(_ cpuPercent: Double?) -> String {
+        guard let cpuPercent, cpuPercent.isFinite else { return "—" }
+        return cpuPercent.formatted(.number.precision(.fractionLength(1))) + "%"
+    }
+
+    private func formattedMemory(_ bytes: UInt64?) -> String {
+        guard let bytes else { return "—" }
+        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .memory)
+    }
+
+    private func formattedDuration(_ duration: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(duration.rounded(.down)))
+        return String(format: "%02d:%02d", totalSeconds / 60, totalSeconds % 60)
     }
 
     private func summarySection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {

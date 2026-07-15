@@ -118,6 +118,47 @@ func translationModePreservesTranslationAndOverlayFlow() async throws {
 }
 
 @Test @MainActor
+func performanceDiagnosticsCompleteAndRemainAvailableAfterTranslationStops() async throws {
+    let audio = PipelineAudioEngine()
+    let overlay = PipelineOverlayEngine()
+    let recorder = PipelinePerformanceRecorder()
+    let pipeline = SubtitlePipeline(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: PipelineWhisperEngine(text: "Measured transcript"),
+        translationEngine: PipelineTranslationEngine(),
+        overlayEngine: overlay,
+        settingsStore: PipelineSettingsStore()
+    )
+
+    await pipeline.start(
+        mode: .translation,
+        onError: { _ in },
+        onPerformanceDiagnostics: { diagnostics in
+            await recorder.append(diagnostics)
+        }
+    )
+    audio.yield(pipelineAudioChunk(timestamp: 4))
+
+    try await pipelineEventually(timeout: .seconds(2)) {
+        await recorder.latest.totalLatency.sampleCount == 1
+    }
+    let completed = await recorder.latest
+    #expect(completed.whisperDecodeLatency.sampleCount == 1)
+    #expect(completed.translationRequestLatency.sampleCount == 1)
+    #expect(completed.overlayRenderLatency.sampleCount == 1)
+    #expect(completed.totalLatency.latest != nil)
+    #expect(completed.residentMemoryBytes != nil)
+
+    await pipeline.stop()
+    let stopped = await recorder.latest
+    #expect(stopped.totalLatency == completed.totalLatency)
+    #expect(stopped.whisperDecodeLatency == completed.whisperDecodeLatency)
+    #expect(stopped.translationRequestLatency == completed.translationRequestLatency)
+    #expect(stopped.overlayRenderLatency == completed.overlayRenderLatency)
+    #expect(stopped.sessionDuration >= completed.sessionDuration)
+}
+
+@Test @MainActor
 func pipelineProxiesOverlayCommandsOnlyDuringTranslationSession() async {
     let audio = PipelineAudioEngine()
     let overlay = PipelineOverlayEngine()
@@ -277,6 +318,36 @@ func translationWorkerSuppressesOnlyAdjacentDuplicateCandidates() async throws {
 }
 
 @Test @MainActor
+func performanceDiagnosticsCountAdjacentTranslationDuplicates() async throws {
+    let audio = PipelineAudioEngine()
+    let translation = PipelineTranslationEngine()
+    let recorder = PipelinePerformanceRecorder()
+    let pipeline = SubtitlePipeline(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: PipelineScriptedWhisperEngine(texts: ["Same line", "Same line"]),
+        translationEngine: translation,
+        overlayEngine: PipelineOverlayEngine(),
+        settingsStore: PipelineSettingsStore()
+    )
+
+    await pipeline.start(
+        mode: .translation,
+        onError: { _ in },
+        onPerformanceDiagnostics: { await recorder.append($0) }
+    )
+    audio.yield(pipelineAudioChunk(timestamp: 0))
+    try await pipelineEventually { await translation.callCount == 1 }
+    audio.yield(pipelineAudioChunk(timestamp: 6))
+
+    try await pipelineEventually(timeout: .seconds(2)) {
+        await recorder.latest.duplicateTranslationCount == 1
+    }
+    #expect(await translation.callCount == 1)
+    #expect(await recorder.latest.totalLatency.sampleCount == 1)
+    await pipeline.stop()
+}
+
+@Test @MainActor
 func translationWorkerDropsOldestPendingRequestsWhenQueueIsFull() async throws {
     let audio = PipelineAudioEngine()
     let texts = [
@@ -287,6 +358,7 @@ func translationWorkerDropsOldestPendingRequestsWhenQueueIsFull() async throws {
     let translation = BlockingPipelineTranslationEngine()
     let warnings = PipelineMessageRecorder()
     let transcripts = PipelineTranscriptRecorder()
+    let performance = PipelinePerformanceRecorder()
     let pipeline = SubtitlePipeline(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: PipelineScriptedWhisperEngine(texts: texts),
@@ -299,7 +371,8 @@ func translationWorkerDropsOldestPendingRequestsWhenQueueIsFull() async throws {
         mode: .translation,
         onError: { _ in },
         onWarning: { message in warnings.append(message) },
-        onTranscript: { transcript in await transcripts.append(transcript) }
+        onTranscript: { transcript in await transcripts.append(transcript) },
+        onPerformanceDiagnostics: { await performance.append($0) }
     )
     for index in texts.indices {
         audio.yield(pipelineAudioChunk(timestamp: TimeInterval(index * 3)))
@@ -313,6 +386,9 @@ func translationWorkerDropsOldestPendingRequestsWhenQueueIsFull() async throws {
     await translation.releaseFirst()
     try await pipelineEventually { await translation.callCount == 9 }
     #expect(await translation.originalTexts == ["Alpha orchard"] + Array(texts[3...]))
+    try await pipelineEventually(timeout: .seconds(2)) {
+        await performance.latest.skippedTranslationCount == 2
+    }
     await pipeline.stop()
 }
 
@@ -709,6 +785,17 @@ private actor PipelineDiagnosticsRecorder {
     var latest: WhisperDiagnostics { values.last ?? WhisperDiagnostics() }
 
     func append(_ diagnostics: WhisperDiagnostics) {
+        values.append(diagnostics)
+    }
+}
+
+private actor PipelinePerformanceRecorder {
+    private var values: [PipelinePerformanceDiagnostics] = []
+    var latest: PipelinePerformanceDiagnostics {
+        values.last ?? PipelinePerformanceDiagnostics()
+    }
+
+    func append(_ diagnostics: PipelinePerformanceDiagnostics) {
         values.append(diagnostics)
     }
 }

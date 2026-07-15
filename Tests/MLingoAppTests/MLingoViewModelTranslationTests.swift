@@ -347,6 +347,25 @@ func transcriptionTestStartsWithoutAnAPIKey() async throws {
 }
 
 @Test @MainActor
+func stoppingPreservesFinalPerformanceDiagnosticsUntilNextSessionStarts() async throws {
+    let viewModel = makeViewModel { _ in AppTestTranslationEngine() }
+
+    viewModel.startTranscriptionTest()
+    try await appEventually { viewModel.status == "Testing transcription" }
+    try await Task.sleep(for: .milliseconds(20))
+
+    viewModel.stopTranscriptionTest()
+    try await appEventually { viewModel.activeMode == .idle }
+
+    #expect(viewModel.performanceDiagnostics.sessionDuration > 0)
+
+    viewModel.startTranscriptionTest()
+    #expect(viewModel.performanceDiagnostics == PipelinePerformanceDiagnostics())
+    viewModel.stopTranscriptionTest()
+    try await appEventually { viewModel.activeMode == .idle }
+}
+
+@Test @MainActor
 func credentialStatusDistinguishesStoredMissingChangedAndFailedStates() async {
     let keyStore = AppTestAPIKeyStore(storedKey: "sk-stored")
     let viewModel = makeViewModel(keyStore: keyStore) { _ in AppTestTranslationEngine() }

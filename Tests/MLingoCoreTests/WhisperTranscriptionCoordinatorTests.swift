@@ -430,6 +430,46 @@ func coordinatorBoundsPendingWindowBacklog() async throws {
 }
 
 @Test
+func coordinatorCoalescesPerformanceQueueUpdatesWhileHandlerIsSlow() async throws {
+    let engine = BlockingWhisperEngine()
+    let performance = BlockingPerformanceQueueRecorder()
+    let coordinator = WhisperTranscriptionCoordinator(
+        engine: engine,
+        configuration: .init(
+            preferredWindowDuration: 3,
+            maximumWindowDuration: 3,
+            silenceFlushDelay: 10,
+            overlapDuration: 0
+        )
+    )
+
+    try await coordinator.start(
+        modelID: "fixture/whisper",
+        language: "English",
+        onTranscript: { _ in },
+        onPerformance: { await performance.record($0) }
+    )
+    await coordinator.ingest(testAudioChunk(duration: 3, timestamp: 0))
+    try await eventually { await engine.hasPendingInference }
+
+    await coordinator.ingest(testAudioChunk(duration: 3, timestamp: 3))
+    try await eventually { await performance.queueDurations.count == 1 }
+    await coordinator.ingest(testAudioChunk(duration: 3, timestamp: 6))
+    await coordinator.ingest(testAudioChunk(duration: 3, timestamp: 9))
+    try await Task.sleep(for: .milliseconds(20))
+
+    #expect(await performance.queueDurations == [3])
+
+    await performance.releaseFirstUpdate()
+    try await eventually { await performance.queueDurations == [3, 9] }
+
+    let stopTask = Task { await coordinator.stop() }
+    try await eventually { await engine.hasCancelledInference }
+    await engine.completePendingInference(text: "cancelled")
+    await stopTask.value
+}
+
+@Test
 func coordinatorRejectsUnrepresentableCoalescingGap() {
     let older = testAudioChunk(duration: 1, timestamp: 0)
     let newer = testAudioChunk(duration: 1, timestamp: .greatestFiniteMagnitude)
@@ -441,6 +481,54 @@ func coordinatorRejectsUnrepresentableCoalescingGap() {
             maximumDuration: 3
         ) == nil
     )
+}
+
+@Test
+func coordinatorCoalescingKeepsLatestContributingSpeechAnchor() throws {
+    let olderInstant = ContinuousClock.now
+    let newerInstant = olderInstant.advanced(by: .seconds(1))
+    let older = TracedAudioWindow(
+        chunk: testAudioChunk(duration: 1, timestamp: 0),
+        speechEnd: olderInstant
+    )
+    let newer = TracedAudioWindow(
+        chunk: testAudioChunk(duration: 1, timestamp: 1),
+        speechEnd: newerInstant
+    )
+
+    let coalesced = try #require(
+        WhisperTranscriptionCoordinator.coalesceWithoutDropping(
+            older,
+            with: newer,
+            maximumDuration: 3
+        )
+    )
+
+    #expect(coalesced.speechEnd == newerInstant)
+}
+
+@Test
+func fullyOverlappedCoalescingDoesNotReplaceSpeechAnchor() throws {
+    let olderInstant = ContinuousClock.now
+    let overlappedInstant = olderInstant.advanced(by: .seconds(1))
+    let older = TracedAudioWindow(
+        chunk: testAudioChunk(duration: 2, timestamp: 0),
+        speechEnd: olderInstant
+    )
+    let overlapped = TracedAudioWindow(
+        chunk: testAudioChunk(duration: 1, timestamp: 0.5),
+        speechEnd: overlappedInstant
+    )
+
+    let coalesced = try #require(
+        WhisperTranscriptionCoordinator.coalesceWithoutDropping(
+            older,
+            with: overlapped,
+            maximumDuration: 3
+        )
+    )
+
+    #expect(coalesced.speechEnd == olderInstant)
 }
 
 @Test
@@ -737,6 +825,25 @@ private actor DiagnosticsRecorder {
 
     func append(_ diagnostics: WhisperDiagnostics) {
         values.append(diagnostics)
+    }
+}
+
+private actor BlockingPerformanceQueueRecorder {
+    private(set) var queueDurations: [TimeInterval] = []
+    private var firstUpdateContinuation: CheckedContinuation<Void, Never>?
+
+    func record(_ update: WhisperPerformanceUpdate) async {
+        guard case .queue(let pendingDuration, _) = update else { return }
+        queueDurations.append(pendingDuration)
+        guard queueDurations.count == 1 else { return }
+        await withCheckedContinuation { continuation in
+            firstUpdateContinuation = continuation
+        }
+    }
+
+    func releaseFirstUpdate() {
+        firstUpdateContinuation?.resume()
+        firstUpdateContinuation = nil
     }
 }
 
