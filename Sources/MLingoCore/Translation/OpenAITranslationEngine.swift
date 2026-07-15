@@ -114,15 +114,20 @@ public final class OpenAITranslationEngine: TranslationEngineProtocol, @unchecke
             maxOutputTokens: Self.maximumOutputTokens
         )
 
-        // Validate API key early for legacy bearer path when store is present.
+        let requestSecretProvider: @Sendable (CredentialID) throws -> String?
+        // Validate and capture once for the legacy bearer path so transport does not
+        // perform a second Keychain read for the same request.
         if apiKeyStore != nil {
-            _ = try validatedAPIKey()
+            let apiKey = try validatedAPIKey()
+            requestSecretProvider = { _ in apiKey }
+        } else {
+            requestSecretProvider = secretProvider
         }
 
         let result = try await transport.complete(
             completion,
             profile: profile,
-            secretProvider: secretProvider
+            secretProvider: requestSecretProvider
         )
         return SubtitleItem(
             original: currentText,

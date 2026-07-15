@@ -31,7 +31,7 @@ public enum OpenAICompatibleErrorMapper {
         if identifiers.contains(where: { $0.contains("quota") || $0.contains("billing") }) {
             return .quotaExceeded
         }
-        if statusCode == 429 {
+        if statusCode == 429 || identifiers.contains("rate_limit_exceeded") {
             return .rateLimited
         }
         return fallbackError(statusCode: statusCode, message: message)

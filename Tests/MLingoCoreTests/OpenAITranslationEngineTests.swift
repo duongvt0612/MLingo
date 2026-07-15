@@ -63,6 +63,22 @@ func translationEngineBuildsPrivateBoundedContextRequest() async throws {
 }
 
 @Test
+func translationEngineLoadsLegacyAPIKeyOncePerRequest() async throws {
+    let keyStore = CountingAPIKeyStore(apiKey: "sk-once")
+    let client = ScriptedHTTPClient(outcomes: [
+        .response(status: 200, data: responseData("Xin chào")),
+    ])
+    let engine = OpenAITranslationEngine(apiKeyStore: keyStore, httpClient: client)
+
+    _ = try await engine.translate(
+        TranslationRequest(current: Transcript(text: "Hello", timestamp: 0)),
+        settings: AppSettings()
+    )
+
+    #expect(keyStore.loadCount == 1)
+}
+
+@Test
 func translationEngineRejectsInvalidLocalInputBeforeNetwork() async throws {
     let client = ScriptedHTTPClient(outcomes: [])
     let engine = OpenAITranslationEngine(
@@ -202,6 +218,33 @@ private final class InMemoryAPIKeyStore: APIKeyStoreProtocol, @unchecked Sendabl
     func loadAPIKey() throws -> String? { apiKey }
     func saveAPIKey(_ apiKey: String) throws { self.apiKey = apiKey }
     func deleteAPIKey() throws { apiKey = nil }
+}
+
+private final class CountingAPIKeyStore: APIKeyStoreProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    private var apiKey: String?
+    private var loads = 0
+
+    init(apiKey: String?) {
+        self.apiKey = apiKey
+    }
+
+    var loadCount: Int { lock.withLock { loads } }
+
+    func loadAPIKey() throws -> String? {
+        lock.withLock {
+            loads += 1
+            return apiKey
+        }
+    }
+
+    func saveAPIKey(_ apiKey: String) throws {
+        lock.withLock { self.apiKey = apiKey }
+    }
+
+    func deleteAPIKey() throws {
+        lock.withLock { apiKey = nil }
+    }
 }
 
 private enum HTTPOutcome {

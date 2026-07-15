@@ -12,6 +12,7 @@ public final class OpenAICompatibleTransport: OpenAICompatibleTransporting,
     @unchecked Sendable
 {
     public typealias RetryDelay = @Sendable (TimeInterval) async throws -> Void
+    public typealias Now = @Sendable () -> Date
 
     public static let defaultTimeout: TimeInterval = 8
     public static let defaultMaxRetryDelay: TimeInterval = 60
@@ -20,6 +21,7 @@ public final class OpenAICompatibleTransport: OpenAICompatibleTransporting,
     private let timeout: TimeInterval
     private let maxRetryDelay: TimeInterval
     private let retryDelay: RetryDelay
+    private let now: Now
 
     public init(
         httpClient: HTTPClientProtocol = URLSession.shared,
@@ -27,7 +29,8 @@ public final class OpenAICompatibleTransport: OpenAICompatibleTransporting,
         maxRetryDelay: TimeInterval = OpenAICompatibleTransport.defaultMaxRetryDelay,
         retryDelay: @escaping RetryDelay = { seconds in
             try await Task.sleep(for: .seconds(seconds))
-        }
+        },
+        now: @escaping Now = Date.init
     ) {
         self.httpClient = httpClient
         self.timeout = timeout
@@ -35,6 +38,7 @@ public final class OpenAICompatibleTransport: OpenAICompatibleTransporting,
             ? maxRetryDelay
             : OpenAICompatibleTransport.defaultMaxRetryDelay
         self.retryDelay = retryDelay
+        self.now = now
     }
 
     public func complete(
@@ -104,15 +108,33 @@ public final class OpenAICompatibleTransport: OpenAICompatibleTransporting,
     }
 
     private func retryDelaySeconds(from response: HTTPURLResponse) -> TimeInterval {
-        guard
-            let value = response.value(forHTTPHeaderField: "Retry-After"),
-            let seconds = TimeInterval(value),
-            seconds.isFinite,
-            seconds >= 0
-        else {
+        guard let value = response.value(forHTTPHeaderField: "Retry-After") else {
             return 0.25
         }
+        if let seconds = TimeInterval(value), seconds.isFinite, seconds >= 0 {
+            return min(seconds, maxRetryDelay)
+        }
+        guard let retryDate = Self.parseHTTPDate(value) else { return 0.25 }
+        let seconds = max(0, retryDate.timeIntervalSince(now()))
         return min(seconds, maxRetryDelay)
+    }
+
+    private static func parseHTTPDate(_ value: String) -> Date? {
+        let formats = [
+            "EEE, dd MMM yyyy HH:mm:ss zzz",
+            "EEEE, dd-MMM-yy HH:mm:ss zzz",
+            "EEE MMM d HH:mm:ss yyyy",
+        ]
+        for format in formats {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = format
+            if let date = formatter.date(from: value) {
+                return date
+            }
+        }
+        return nil
     }
 
     private func logAPIError(_ error: MLingoError, response: HTTPURLResponse) {

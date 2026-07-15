@@ -34,7 +34,14 @@ public enum OpenAICompatibleTranslationProviderFactory {
         selection: ResolvedProviderSelection,
         credentialStore: any ProviderCredentialStoreProtocol,
         httpClient: HTTPClientProtocol = URLSession.shared
-    ) -> any TranslationProvider {
+    ) throws -> any TranslationProvider {
+        guard selection.profile.apiStyle == .responses
+            || selection.profile.apiStyle == .chatCompletions
+        else {
+            throw MLingoError.invalidTranslationConfiguration(
+                "Native provider selections require a native translation provider."
+            )
+        }
         let engine = OpenAITranslationEngine(
             profile: selection.profile,
             secretProvider: { id in try credentialStore.loadCredential(for: id) },

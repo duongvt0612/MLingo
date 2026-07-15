@@ -45,20 +45,50 @@ enum TransportFixtures {
     static let translated = "Xin chào"
 
     static func responsesSuccess(text: String = translated) -> Data {
-        Data(#"{"status":"completed","output_text":"\#(text)","usage":{"input_tokens":11,"output_tokens":3,"total_tokens":14}}"#.utf8)
+        encode(ResponsesFixture(
+            status: "completed",
+            output_text: text,
+            usage: ResponsesUsageFixture(
+                input_tokens: 11,
+                output_tokens: 3,
+                total_tokens: 14
+            )
+        ))
     }
 
     static func chatCompletionsSuccess(text: String = translated) -> Data {
-        Data(#"{"id":"chatcmpl-1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"\#(text)"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14}}"#.utf8)
+        encode(ChatCompletionFixture(
+            id: "chatcmpl-1",
+            object: "chat.completion",
+            choices: [ChatChoiceFixture(
+                index: 0,
+                message: ChatMessageFixture(role: "assistant", content: text),
+                finish_reason: "stop"
+            )],
+            usage: ChatUsageFixture(
+                prompt_tokens: 11,
+                completion_tokens: 3,
+                total_tokens: 14
+            )
+        ))
     }
 
     static func chatCompletionsStreamChunk() -> Data {
-        Data(#"{"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}"#.utf8)
+        encode(ChatStreamFixture(
+            id: "chatcmpl-1",
+            object: "chat.completion.chunk",
+            choices: [ChatStreamChoiceFixture(
+                index: 0,
+                delta: ChatDeltaFixture(content: "Hi")
+            )]
+        ))
     }
 
     static func modelsList(_ ids: [String]) -> Data {
-        let items = ids.map { #"{"id":"\#($0)","object":"model"}"# }.joined(separator: ",")
-        return Data(#"{"object":"list","data":[\#(items)]}"#.utf8)
+        encode(ModelsListFixture(
+            object: "list",
+            data: ids.map { ModelFixture(id: $0, object: "model") }
+        ))
     }
 
     static func openAIProfile(
@@ -92,6 +122,88 @@ enum TransportFixtures {
             models: [.translation: ["local-model"]]
         )
     }
+
+    private static func encode<Value: Encodable>(_ value: Value) -> Data {
+        do {
+            return try JSONEncoder().encode(value)
+        } catch {
+            preconditionFailure("Transport fixture encoding failed: \(error)")
+        }
+    }
+}
+
+private struct ResponsesFixture: Encodable {
+    let status: String
+    let output_text: String
+    let usage: ResponsesUsageFixture
+}
+
+private struct ResponsesUsageFixture: Encodable {
+    let input_tokens: Int
+    let output_tokens: Int
+    let total_tokens: Int
+}
+
+private struct ChatCompletionFixture: Encodable {
+    let id: String
+    let object: String
+    let choices: [ChatChoiceFixture]
+    let usage: ChatUsageFixture
+}
+
+private struct ChatChoiceFixture: Encodable {
+    let index: Int
+    let message: ChatMessageFixture
+    let finish_reason: String
+}
+
+private struct ChatMessageFixture: Encodable {
+    let role: String
+    let content: String
+}
+
+private struct ChatUsageFixture: Encodable {
+    let prompt_tokens: Int
+    let completion_tokens: Int
+    let total_tokens: Int
+}
+
+private struct ChatStreamFixture: Encodable {
+    let id: String
+    let object: String
+    let choices: [ChatStreamChoiceFixture]
+}
+
+private struct ChatStreamChoiceFixture: Encodable {
+    let index: Int
+    let delta: ChatDeltaFixture
+
+    private enum CodingKeys: String, CodingKey {
+        case index
+        case delta
+        case finish_reason
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(index, forKey: .index)
+        try container.encode(delta, forKey: .delta)
+        try container.encodeNil(forKey: .finish_reason)
+    }
+}
+
+private struct ChatDeltaFixture: Encodable {
+    let content: String
+}
+
+private struct ModelsListFixture: Encodable {
+    let object: String
+    let data: [ModelFixture]
+}
+
+private struct ModelFixture: Encodable {
+    let id: String
+    let object: String
 }
 
 extension URLRequest {

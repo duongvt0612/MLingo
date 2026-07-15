@@ -154,7 +154,7 @@ final class MLingoViewModel {
         let translation = ProviderTranslationEngine(
             profileStore: profileStore,
             providerResolver: { selection in
-                OpenAICompatibleTranslationProviderFactory.make(
+                try OpenAICompatibleTranslationProviderFactory.make(
                     selection: selection,
                     credentialStore: credentialStore
                 )
@@ -449,6 +449,19 @@ final class MLingoViewModel {
 
             do {
                 try Task.checkCancellation()
+                guard await self.save() else {
+                    guard self.isCurrentSession(sessionID, mode: .preparingTranslation) else {
+                        return
+                    }
+                    self.activeMode = .idle
+                    self.activeTranslationProviderKind = nil
+                    self.activeTranslationProviderEndpoint = nil
+                    self.activeTranslationCredentialID = nil
+                    self.startTask = nil
+                    self.status = "Settings need attention"
+                    return
+                }
+                try Task.checkCancellation()
                 let selection = try await self.resolveTranslationSelection()
                 try Task.checkCancellation()
                 guard self.isCurrentSession(sessionID, mode: .preparingTranslation) else {
@@ -470,7 +483,8 @@ final class MLingoViewModel {
                 self.activeMode = .idle
                 self.startPipeline(
                     mode: .translation,
-                    translationSelection: selection
+                    translationSelection: selection,
+                    settingsArePersisted: true
                 )
             } catch is CancellationError {
                 if self.isCurrentSession(sessionID, mode: .preparingTranslation) {
@@ -728,7 +742,8 @@ final class MLingoViewModel {
 
     private func startPipeline(
         mode: SubtitlePipelineMode,
-        translationSelection: ResolvedProviderSelection? = nil
+        translationSelection: ResolvedProviderSelection? = nil,
+        settingsArePersisted: Bool = false
     ) {
         guard activeMode == .idle, startTask == nil else { return }
 
@@ -737,7 +752,7 @@ final class MLingoViewModel {
         let startingStatus = mode == .translation ? "Starting translation" : "Starting transcription test"
         activeSessionID = sessionID
         activeMode = viewMode
-        status = "Saving settings"
+        status = settingsArePersisted ? startingStatus : "Saving settings"
         clearError()
         lastWarning = nil
         transcriptionEntries = []
@@ -750,10 +765,12 @@ final class MLingoViewModel {
         startTask = Task {
             defer { clearStartTask(for: sessionID) }
 
-            guard await save() else {
-                guard isCurrentSession(sessionID, mode: viewMode) else { return }
-                await finishActiveMode(statusAfterStop: "Settings need attention")
-                return
+            if !settingsArePersisted {
+                guard await save() else {
+                    guard isCurrentSession(sessionID, mode: viewMode) else { return }
+                    await finishActiveMode(statusAfterStop: "Settings need attention")
+                    return
+                }
             }
             guard isCurrentSession(sessionID, mode: viewMode) else { return }
             status = startingStatus

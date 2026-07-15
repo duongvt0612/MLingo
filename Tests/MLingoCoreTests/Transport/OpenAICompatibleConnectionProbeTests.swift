@@ -38,6 +38,42 @@ func connectionProbeFallsBackToCompletionWhenModelsMissing() async throws {
     #expect(client.requests.count == 2)
 }
 
+@Test
+func connectionProbeCompletionFallbackHonorsRetryAfterDelay() async throws {
+    let client = ScriptedTransportHTTPClient(outcomes: [
+        .response(status: 404, data: Data(), headers: [:]),
+        .response(
+            status: 429,
+            data: Data(#"{"error":{"code":"rate_limit_exceeded","message":"Slow"}}"#.utf8),
+            headers: ["Retry-After": "7"]
+        ),
+        .response(
+            status: 200,
+            data: TransportFixtures.chatCompletionsSuccess(text: "OK"),
+            headers: [:]
+        ),
+    ])
+    let delays = ConnectionProbeDelayRecorder()
+    let probe = OpenAICompatibleConnectionProbe(
+        httpClient: client,
+        retryDelay: { seconds in await delays.record(seconds) }
+    )
+
+    let result = try await probe.testConnection(
+        profile: TransportFixtures.loopbackProfile(),
+        secretProvider: { _ in nil }
+    )
+
+    #expect(result.succeeded)
+    #expect(client.requests.count == 3)
+    #expect(await delays.values == [7])
+}
+
+private actor ConnectionProbeDelayRecorder {
+    private(set) var values: [TimeInterval] = []
+    func record(_ value: TimeInterval) { values.append(value) }
+}
+
 @Test(arguments: [404, 405, 501])
 func connectionProbeListModelsMarksUnsupportedEndpoint(status: Int) async throws {
     let client = ScriptedTransportHTTPClient(outcomes: [

@@ -34,13 +34,18 @@ public final class OpenAICompatibleConnectionProbe: ProviderConnectionProbing,
 {
     private let httpClient: HTTPClientProtocol
     private let timeout: TimeInterval
+    private let retryDelay: OpenAICompatibleTransport.RetryDelay
 
     public init(
         httpClient: HTTPClientProtocol = URLSession.shared,
-        timeout: TimeInterval = 5
+        timeout: TimeInterval = 5,
+        retryDelay: @escaping OpenAICompatibleTransport.RetryDelay = { seconds in
+            try await Task.sleep(for: .seconds(seconds))
+        }
     ) {
         self.httpClient = httpClient
         self.timeout = timeout
+        self.retryDelay = retryDelay
     }
 
     public func testConnection(
@@ -78,7 +83,7 @@ public final class OpenAICompatibleConnectionProbe: ProviderConnectionProbing,
         let transport = OpenAICompatibleTransport(
             httpClient: httpClient,
             timeout: timeout,
-            retryDelay: { _ in }
+            retryDelay: retryDelay
         )
         let model = profile.models[.translation]?.first
             ?? profile.models.values.flatMap { $0 }.first

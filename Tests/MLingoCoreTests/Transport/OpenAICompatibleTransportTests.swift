@@ -3,6 +3,38 @@ import Testing
 @testable import MLingoCore
 
 @Test
+func transportFixturesEscapeDynamicJSONValues() throws {
+    let special = "quote \" slash \\ newline\nnext"
+
+    let responses = try #require(
+        JSONSerialization.jsonObject(
+            with: TransportFixtures.responsesSuccess(text: special)
+        ) as? [String: Any]
+    )
+    #expect(responses["output_text"] as? String == special)
+
+    let chat = try #require(
+        JSONSerialization.jsonObject(
+            with: TransportFixtures.chatCompletionsSuccess(text: special)
+        ) as? [String: Any]
+    )
+    let choices = try #require(chat["choices"] as? [[String: Any]])
+    let message = try #require(choices.first?["message"] as? [String: Any])
+    #expect(message["content"] as? String == special)
+
+    let models = try #require(
+        JSONSerialization.jsonObject(
+            with: TransportFixtures.modelsList([special])
+        ) as? [String: Any]
+    )
+    let modelItems = try #require(models["data"] as? [[String: Any]])
+    #expect(modelItems.first?["id"] as? String == special)
+    #expect(try JSONSerialization.jsonObject(
+        with: TransportFixtures.chatCompletionsStreamChunk()
+    ) is [String: Any])
+}
+
+@Test
 func requestBuilderAppendsPathWithoutCorruptingBase() throws {
     let base = URL(string: "https://api.openai.com/v1")!
     let responses = try OpenAICompatibleRequestBuilder.completionURL(
@@ -252,6 +284,50 @@ func transportRetriesRateLimitOnce() async throws {
     #expect(result.text == TransportFixtures.translated)
     #expect(client.requests.count == 2)
     #expect(await delays.values == [10])
+}
+
+@Test
+func transportParsesAndCapsHTTPDateRetryAfter() async throws {
+    let client = ScriptedTransportHTTPClient(outcomes: [
+        .response(
+            status: 429,
+            data: Data(#"{"error":{"code":"rate_limit_exceeded"}}"#.utf8),
+            headers: ["Retry-After": "Thu, 01 Jan 1970 00:02:00 GMT"]
+        ),
+        .response(status: 200, data: TransportFixtures.responsesSuccess(), headers: [:]),
+    ])
+    let delays = TransportDelayRecorder()
+    let transport = OpenAICompatibleTransport(
+        httpClient: client,
+        maxRetryDelay: 60,
+        retryDelay: { seconds in await delays.record(seconds) },
+        now: { Date(timeIntervalSince1970: 0) }
+    )
+
+    _ = try await transport.complete(
+        OpenAICompatibleCompletionRequest(
+            model: "m",
+            instructions: "i",
+            input: "x",
+            maxOutputTokens: 1
+        ),
+        profile: TransportFixtures.openAIProfile(),
+        secretProvider: { _ in "sk" }
+    )
+
+    #expect(await delays.values == [60])
+}
+
+@Test
+func errorMapperRecognizesRateLimitCodeForNon429Status() {
+    let error = OpenAICompatibleErrorMapper.mapHTTPError(
+        data: Data(
+            #"{"error":{"code":"rate_limit_exceeded","message":"Slow down"}}"#.utf8
+        ),
+        statusCode: 400
+    )
+
+    #expect(error == .rateLimited)
 }
 
 @Test(arguments: [ProviderAPIStyle.responses, .chatCompletions])

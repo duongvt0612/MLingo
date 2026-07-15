@@ -348,6 +348,48 @@ func translationStartWithNoneAuthProfileDoesNotRequireAPIKey() async throws {
 }
 
 @Test @MainActor
+func translationStartPersistsMigrationBeforeResolvingInitialSelection() async throws {
+    let profileStore = AppTestProfileStore(configuration: ProviderConfiguration())
+    let credentials = AppTestCredentialStore()
+    let legacyKeyStore = AppTestAPIKeyStore(storedKey: "sk-legacy")
+    let migration = LegacyOpenAIProviderMigrator(
+        profileStore: profileStore,
+        credentialStore: credentials,
+        legacyAPIKeyStore: legacyKeyStore
+    )
+    let provider = AppRecordingTranslationProvider()
+    let selectionRecorder = AppResolvedSelectionRecorder(provider: provider)
+    let translationEngine = ProviderTranslationEngine(
+        profileStore: profileStore,
+        providerResolver: { selection in selectionRecorder.resolve(selection) }
+    )
+    let audioFactory = AppTestAudioFactory()
+    let viewModel = makeViewModel(
+        keyStore: legacyKeyStore,
+        audioFactory: audioFactory,
+        providerMigration: migration,
+        profileStore: profileStore,
+        credentialStore: credentials,
+        pipelineTranslationEngine: translationEngine,
+        whisperEngine: AppTestWhisperEngine(text: "Translate this")
+    ) { _ in AppTestTranslationEngine() }
+
+    viewModel.start()
+    try await appEventually { viewModel.status == "Listening" }
+    audioFactory.yield(appTestAudioChunk(timestamp: 0))
+    try await appEventually { selectionRecorder.latest != nil }
+
+    #expect(selectionRecorder.latest?.profile.id == ProviderDefaults.openAIProfileID)
+    #expect(selectionRecorder.latest?.model == viewModel.settings.openAIModel)
+    #expect(
+        try credentials.loadCredential(for: ProviderDefaults.openAICredentialID)
+            == "sk-legacy"
+    )
+    viewModel.stop()
+    try await appEventually { viewModel.activeMode == .idle }
+}
+
+@Test @MainActor
 func translationStartUsesSelectedProfileCredentialNotOpenAIDefault() async throws {
     let audioFactory = AppTestAudioFactory()
     let customID = UUID()

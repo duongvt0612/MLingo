@@ -170,7 +170,7 @@ func selectedLocalProfileRoutesTranslationThroughChatCompletionsWithoutAuth() as
     let engine = ProviderTranslationEngine(
         profileStore: store,
         providerResolver: { selection in
-            OpenAICompatibleTranslationProviderFactory.make(
+            try OpenAICompatibleTranslationProviderFactory.make(
                 selection: selection,
                 credentialStore: credentials,
                 httpClient: client
@@ -192,6 +192,30 @@ func selectedLocalProfileRoutesTranslationThroughChatCompletionsWithoutAuth() as
     #expect(request.url?.absoluteString == "http://127.0.0.1:11434/v1/chat/completions")
     #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
     #expect(request.jsonBody?["model"] as? String == "llama3.2")
+}
+
+@Test
+func openAICompatibleFactoryRejectsNativeAPIStyleBeforeConstructingProvider() {
+    let profile = ProviderProfile(
+        name: "Built-in MLX",
+        kind: .builtInMLX,
+        endpoint: nil,
+        apiStyle: .native,
+        authentication: .none,
+        models: [.translation: ["local-model"]]
+    )
+    let selection = ResolvedProviderSelection(
+        capability: .translation,
+        profile: profile,
+        model: "local-model"
+    )
+
+    #expect(throws: MLingoError.self) {
+        _ = try OpenAICompatibleTranslationProviderFactory.make(
+            selection: selection,
+            credentialStore: AdapterCredentialStore()
+        )
+    }
 }
 
 @Test
