@@ -70,6 +70,7 @@ struct ProviderProfileDraft: Identifiable, Equatable, Sendable {
     var authenticationMode: ProviderAuthenticationMode
     var customHeaderName: String
     var credentialID: CredentialID
+    let originalCredentialID: CredentialID?
     var models: [ModelCapability: [String]]
     var hasStoredCredential: Bool
 
@@ -87,14 +88,17 @@ struct ProviderProfileDraft: Identifiable, Equatable, Sendable {
             authenticationMode = .none
             customHeaderName = "X-API-Key"
             credentialID = Self.defaultCredentialID(for: profile.id)
+            originalCredentialID = nil
         case .bearer(let id):
             authenticationMode = .bearer
             customHeaderName = "X-API-Key"
             credentialID = id
+            originalCredentialID = id
         case .customHeader(let name, let id):
             authenticationMode = .customHeader
             customHeaderName = name
             credentialID = id
+            originalCredentialID = id
         }
     }
 
@@ -232,11 +236,15 @@ struct SettingsEditorDraft: Equatable, Sendable {
     mutating func deleteProfile(id: UUID) {
         guard let index = profiles.firstIndex(where: { $0.id == id }) else { return }
         let credentialID = profiles[index].referencedCredentialID
+            ?? profiles[index].originalCredentialID
         profiles.remove(at: index)
         selections = selections.filter { $0.value.profileID != id }
 
         guard let credentialID,
-              !profiles.contains(where: { $0.referencedCredentialID == credentialID })
+              !profiles.contains(where: {
+                  $0.referencedCredentialID == credentialID
+                      || $0.originalCredentialID == credentialID
+              })
         else { return }
         credentialMutations[credentialID] = .remove
     }

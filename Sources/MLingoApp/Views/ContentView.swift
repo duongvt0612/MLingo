@@ -265,10 +265,41 @@ struct ContentView: View {
                 whisperModelStatusRow
             }
             GridRow {
-                progressRow("OpenAI API key", isReady: !viewModel.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                translationProviderStatusRow
                 progressRow("Subtitle overlay", isReady: true)
             }
         }
+    }
+
+    @ViewBuilder
+    private var translationProviderStatusRow: some View {
+        Group {
+            switch viewModel.translationProviderReadiness {
+            case .checking:
+                Label {
+                    Text("Translation: Checking")
+                } icon: {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            case .ready(let profileName, let model):
+                Label(
+                    "Translation: \(profileName) · \(model)",
+                    systemImage: "checkmark.circle.fill"
+                )
+                .foregroundStyle(.green)
+            case .needsAttention(let message):
+                Label(
+                    "Translation: Needs attention",
+                    systemImage: "exclamationmark.circle.fill"
+                )
+                .foregroundStyle(.orange)
+                .help(message)
+                .accessibilityHint(message)
+            }
+        }
+        .font(.callout)
+        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder

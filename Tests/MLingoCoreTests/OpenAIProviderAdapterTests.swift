@@ -104,7 +104,7 @@ func legacyOpenAIMigrationMovesCredentialAndModelThenDeletesLegacyKey() async th
 }
 
 @Test
-func legacyOpenAIMigrationPreservesNonOpenAITranslationSelection() async throws {
+func legacyOpenAIMigrationNeverOverwritesExistingProviderConfiguration() async throws {
     let ollamaID = UUID()
     let ollama = OpenAICompatiblePresets.make(
         kind: .ollama,
@@ -145,8 +145,8 @@ func legacyOpenAIMigrationPreservesNonOpenAITranslationSelection() async throws 
     )
     #expect(selection.profileID == ollamaID)
     #expect(selection.model == "llama3.2")
-    #expect(migratedOpenAI.models[.translation] == ["gpt-newer"])
-    #expect(await profileStore.saveCount == 2)
+    #expect(migratedOpenAI.models[.translation] == ["gpt-old"])
+    #expect(await profileStore.saveCount == 0)
 }
 
 @Test

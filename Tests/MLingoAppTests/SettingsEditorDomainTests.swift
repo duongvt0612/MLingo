@@ -96,6 +96,31 @@ func deletingProfileClearsSelectionsAndOnlyRemovesUnreferencedCredential() throw
     #expect(draft.credentialMutations[sharedCredential] == .remove)
 }
 
+@Test
+func deletingProfileAfterDisablingAuthenticationStillRemovesItsUnreferencedCredential() {
+    let credentialID = CredentialID("credential-to-remove")
+    let profile = ProviderProfile(
+        name: "Gateway",
+        kind: .custom,
+        endpoint: URL(string: "https://gateway.example.com/v1")!,
+        apiStyle: .responses,
+        authentication: .bearer(credentialID: credentialID),
+        models: [.translation: ["translate"]]
+    )
+    var profileDraft = ProviderProfileDraft(profile: profile, hasStoredCredential: true)
+    profileDraft.authenticationMode = .none
+    var draft = SettingsEditorDraft(
+        appSettings: AppSettings(),
+        profiles: [profileDraft],
+        selections: [:],
+        overlaySelection: .automatic
+    )
+
+    draft.deleteProfile(id: profile.id)
+
+    #expect(draft.credentialMutations[credentialID] == .remove)
+}
+
 @Test @MainActor
 func settingsEditorRoutesDestinationsAndDiscardRestoresItsSnapshot() {
     let profile = OpenAICompatiblePresets.make(

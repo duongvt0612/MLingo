@@ -553,6 +553,71 @@ func translationDestinationDescriptionTracksResolvedProvider() async throws {
 }
 
 @Test @MainActor
+func translationProviderReadinessUsesResolvedLocalProfileWithoutCredential() async {
+    let profileID = UUID()
+    let profile = OpenAICompatiblePresets.make(
+        kind: .ollama,
+        name: "Local Ollama",
+        id: profileID,
+        models: [.translation: ["qwen3:4b"]]
+    )
+    let profileStore = AppTestProfileStore(configuration: ProviderConfiguration(
+        profiles: [profile],
+        selections: [
+            .translation: CapabilitySelection(profileID: profileID, model: "qwen3:4b"),
+        ]
+    ))
+    let viewModel = makeViewModel(profileStore: profileStore) { _ in
+        AppTestTranslationEngine()
+    }
+
+    await viewModel.load()
+
+    #expect(
+        viewModel.translationProviderReadiness
+            == .ready(profileName: "Local Ollama", model: "qwen3:4b")
+    )
+}
+
+@Test @MainActor
+func translationProviderReadinessReportsMissingSelectedCredential() async {
+    let profileID = UUID()
+    let credentialID = CredentialID(rawValue: "missing-bearer")
+    let profile = ProviderProfile(
+        id: profileID,
+        name: "Private Gateway",
+        kind: .custom,
+        endpoint: URL(string: "https://gateway.example.com/v1")!,
+        apiStyle: .chatCompletions,
+        authentication: .bearer(credentialID: credentialID),
+        models: [.translation: ["translator-v1"]]
+    )
+    let profileStore = AppTestProfileStore(configuration: ProviderConfiguration(
+        profiles: [profile],
+        selections: [
+            .translation: CapabilitySelection(
+                profileID: profileID,
+                model: "translator-v1"
+            ),
+        ]
+    ))
+    let viewModel = makeViewModel(
+        profileStore: profileStore,
+        credentialStore: AppTestCredentialStore()
+    ) { _ in
+        AppTestTranslationEngine()
+    }
+
+    await viewModel.load()
+
+    guard case .needsAttention(let message) = viewModel.translationProviderReadiness else {
+        Issue.record("Expected missing provider credential to require attention")
+        return
+    }
+    #expect(message.contains("Credential missing"))
+}
+
+@Test @MainActor
 func openAIKindUsesActualRemoteHostForPrivacyDestination() {
     let proxiedOpenAI = ProviderProfile(
         id: UUID(),

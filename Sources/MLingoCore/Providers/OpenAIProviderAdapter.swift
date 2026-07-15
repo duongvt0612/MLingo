@@ -189,22 +189,13 @@ public actor LegacyOpenAIProviderMigrator: ProviderMigrationProtocol {
         let ownsTranslationSelection = currentSelection == nil
             || currentSelection?.profileID == ProviderDefaults.openAIProfileID
 
-        if let index = configuration.profiles.firstIndex(
+        if configuration.profiles.contains(
             where: { $0.id == ProviderDefaults.openAIProfileID }
         ) {
-            var profile = configuration.profiles[index]
-            var changed = false
-            if profile.models[.translation] != [model] {
-                profile.models[.translation] = [model]
-                configuration.profiles[index] = profile
-                changed = true
-            }
-            if ownsTranslationSelection,
-               configuration.selections[.translation] != openAISelection {
-                configuration.selections[.translation] = openAISelection
-                changed = true
-            }
-            return changed
+            // ProviderConfiguration is canonical after the one-time migration. Re-running
+            // migration during app load/start must never overwrite user-edited models or
+            // capability assignments with the legacy AppSettings.openAIModel value.
+            return false
         }
 
         configuration.profiles.append(

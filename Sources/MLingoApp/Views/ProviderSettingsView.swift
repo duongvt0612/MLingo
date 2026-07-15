@@ -240,7 +240,10 @@ private struct ProviderProfileEditor: View {
                     TextField("Header name", text: profile.customHeaderName)
                         .focused($focusedField, equals: .customHeader)
                 }
-                if profile.wrappedValue.authenticationMode != .none {
+                if profile.wrappedValue.authenticationMode != .none
+                    || profile.wrappedValue.hasStoredCredential
+                    || editor.draft.credentialMutations[profile.wrappedValue.credentialID] != nil
+                {
                     credentialControls(profile: profile)
                 }
             }

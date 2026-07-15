@@ -40,6 +40,12 @@ final class MLingoViewModel {
         case failed(String)
     }
 
+    enum TranslationProviderReadiness: Equatable {
+        case checking
+        case ready(profileName: String, model: String)
+        case needsAttention(String)
+    }
+
     var settings: AppSettings
     var apiKey: String = ""
     private(set) var activeMode: ActiveMode = .idle
@@ -54,6 +60,7 @@ final class MLingoViewModel {
     /// User-facing destination for privacy copy (local / OpenAI / custom host).
     private(set) var translationDestinationDescription =
         "a configured translation provider"
+    private(set) var translationProviderReadiness: TranslationProviderReadiness = .checking
     var audioDiagnostics = AudioCaptureDiagnostics()
     var whisperDiagnostics = WhisperDiagnostics()
     var performanceDiagnostics = PipelinePerformanceDiagnostics()
@@ -198,8 +205,6 @@ final class MLingoViewModel {
             }
         }
 
-        await refreshTranslationDestinationDescription()
-
         do {
             let loadedAPIKey = try apiKeyStore.loadAPIKey()?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -221,6 +226,8 @@ final class MLingoViewModel {
                 present(error)
             }
         }
+
+        await refreshTranslationDestinationDescription()
     }
 
     func makeSettingsEditor() async throws -> SettingsEditorViewModel {
@@ -528,15 +535,38 @@ final class MLingoViewModel {
             translationDestinationDescription = "OpenAI"
             activeTranslationProviderKind = .openAI
             activeTranslationProviderEndpoint = URL(string: "https://api.openai.com/v1")
+            translationProviderReadiness = apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? .needsAttention("Credential missing for OpenAI.")
+                : .ready(profileName: "OpenAI", model: settings.openAIModel)
             return
         }
+        translationProviderReadiness = .checking
         do {
             let selection = try await resolveTranslationSelection()
             activeTranslationProviderKind = selection.profile.kind
             activeTranslationProviderEndpoint = selection.profile.endpoint
             applyTranslationDestination(from: selection.profile)
+            do {
+                try ensureCredentialPresent(for: selection.profile.authentication)
+                translationProviderReadiness = .ready(
+                    profileName: selection.profile.name,
+                    model: selection.model
+                )
+            } catch let error as MLingoError {
+                switch error {
+                case .missingAPIKey:
+                    translationProviderReadiness = .needsAttention(
+                        "Credential missing for \(selection.profile.name)."
+                    )
+                default:
+                    translationProviderReadiness = .needsAttention(error.localizedDescription)
+                }
+            } catch {
+                translationProviderReadiness = .needsAttention(error.localizedDescription)
+            }
         } catch {
             translationDestinationDescription = "a configured translation provider"
+            translationProviderReadiness = .needsAttention(error.localizedDescription)
         }
     }
 
