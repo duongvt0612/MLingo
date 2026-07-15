@@ -85,6 +85,7 @@ final class MLingoViewModel {
     private let apiKeyStore: APIKeyStoreProtocol
     private let pipeline: SubtitlePipeline
     private let audioEngineFactory: any AudioEngineFactoryProtocol
+    private let providerMigration: (any ProviderMigrationProtocol)?
     private let translationTestEngineFactory: TranslationTestEngineFactory
     private var startTask: Task<Void, Never>?
     private var activeSessionID = UUID()
@@ -97,6 +98,7 @@ final class MLingoViewModel {
         apiKeyStore: APIKeyStoreProtocol,
         pipeline: SubtitlePipeline,
         audioEngineFactory: any AudioEngineFactoryProtocol,
+        providerMigration: (any ProviderMigrationProtocol)? = nil,
         translationTestEngineFactory: @escaping TranslationTestEngineFactory
     ) {
         self.settings = settings
@@ -104,15 +106,29 @@ final class MLingoViewModel {
         self.apiKeyStore = apiKeyStore
         self.pipeline = pipeline
         self.audioEngineFactory = audioEngineFactory
+        self.providerMigration = providerMigration
         self.translationTestEngineFactory = translationTestEngineFactory
         whisperDiagnostics.modelID = settings.whisperModel
     }
 
     static func live() -> MLingoViewModel {
         let settingsStore = UserDefaultsSettingsStore()
-        let apiKeyStore = KeychainAPIKeyStore()
+        let legacyAPIKeyStore = KeychainAPIKeyStore()
+        let profileStore = UserDefaultsProviderProfileStore()
+        let credentialStore = KeychainProviderCredentialStore()
+        let apiKeyStore = ProviderAPIKeyStoreAdapter(credentialStore: credentialStore)
+        let migration = LegacyOpenAIProviderMigrator(
+            profileStore: profileStore,
+            credentialStore: credentialStore,
+            legacyAPIKeyStore: legacyAPIKeyStore
+        )
         let overlay = FloatingSubtitleWindowController()
-        let translation = OpenAITranslationEngine(apiKeyStore: apiKeyStore)
+        let openAIEngine = OpenAITranslationEngine(apiKeyStore: apiKeyStore)
+        let openAIProvider = OpenAITranslationProviderAdapter(engine: openAIEngine)
+        let translation = ProviderTranslationEngine(
+            profileStore: profileStore,
+            providerResolver: { _ in openAIProvider }
+        )
         let audioEngineFactory = SystemAudioEngineFactory()
         let pipeline = SubtitlePipeline(
             audioEngineFactory: audioEngineFactory,
@@ -128,6 +144,7 @@ final class MLingoViewModel {
             apiKeyStore: apiKeyStore,
             pipeline: pipeline,
             audioEngineFactory: audioEngineFactory,
+            providerMigration: migration,
             translationTestEngineFactory: { apiKey in
                 OpenAITranslationEngine(
                     apiKeyStore: TransientAPIKeyStore(apiKey: apiKey)
@@ -137,13 +154,22 @@ final class MLingoViewModel {
     }
 
     func load() async {
-        var settingsLoadError: String?
+        var configurationLoadError: String?
         do {
             settings = try await settingsStore.load()
             whisperDiagnostics.modelID = settings.whisperModel
         } catch {
-            settingsLoadError = error.localizedDescription
+            configurationLoadError = error.localizedDescription
             present(error)
+        }
+
+        if configurationLoadError == nil, let providerMigration {
+            do {
+                try await providerMigration.migrate(settings: settings)
+            } catch {
+                configurationLoadError = error.localizedDescription
+                present(error)
+            }
         }
 
         do {
@@ -151,16 +177,16 @@ final class MLingoViewModel {
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             apiKey = loadedAPIKey
             credentialState = loadedAPIKey.isEmpty ? .notStored : .stored
-            if settingsLoadError == nil {
+            if configurationLoadError == nil {
                 clearError()
             }
         } catch {
             let credentialError = error.localizedDescription
             apiKey = ""
             credentialState = .failed(credentialError)
-            if let settingsLoadError {
+            if let configurationLoadError {
                 presentMessage(
-                    "\(settingsLoadError)\n\(credentialError)",
+                    "\(configurationLoadError)\n\(credentialError)",
                     actions: [.openSettings]
                 )
             } else {
@@ -210,8 +236,20 @@ final class MLingoViewModel {
         }
 
         do {
+            try await providerMigration?.migrate(settings: normalizedSettings)
+        } catch {
+            if credentialChanged {
+                try? persistAPIKey(previousAPIKey)
+            }
+            credentialState = previousCredentialState
+            present(error)
+            return false
+        }
+
+        do {
             try await settingsStore.save(normalizedSettings)
         } catch {
+            try? await providerMigration?.migrate(settings: settings)
             if credentialChanged {
                 do {
                     try persistAPIKey(previousAPIKey)

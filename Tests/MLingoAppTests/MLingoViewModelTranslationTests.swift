@@ -179,6 +179,24 @@ func successfulLoadClearsAStaleErrorAfterBothStoresSucceed() async {
 }
 
 @Test @MainActor
+func loadMigratesLegacyProviderConfigurationBeforeReadingCredential() async {
+    let keyStore = AppTestAPIKeyStore()
+    let migration = AppTestProviderMigration {
+        try keyStore.saveAPIKey("sk-migrated")
+    }
+    let viewModel = makeViewModel(
+        keyStore: keyStore,
+        providerMigration: migration
+    ) { _ in AppTestTranslationEngine() }
+
+    await viewModel.load()
+
+    #expect(migration.callCount == 1)
+    #expect(viewModel.apiKey == "sk-migrated")
+    #expect(viewModel.credentialState == .stored)
+}
+
+@Test @MainActor
 func savingAnUnchangedAPIKeyDoesNotWriteKeychain() async {
     let keyStore = AppTestAPIKeyStore(storedKey: "sk-same")
     let viewModel = makeViewModel(keyStore: keyStore) { _ in AppTestTranslationEngine() }
@@ -540,6 +558,7 @@ private func makeViewModel(
     keyStore: AppTestAPIKeyStore = AppTestAPIKeyStore(),
     audioFactory: AppTestAudioFactory = AppTestAudioFactory(),
     overlayEngine: AppTestOverlayEngine = AppTestOverlayEngine(),
+    providerMigration: (any ProviderMigrationProtocol)? = nil,
     translationTestEngineFactory: @escaping MLingoViewModel.TranslationTestEngineFactory
 ) -> MLingoViewModel {
     let pipeline = SubtitlePipeline(
@@ -555,8 +574,28 @@ private func makeViewModel(
         apiKeyStore: keyStore,
         pipeline: pipeline,
         audioEngineFactory: audioFactory,
+        providerMigration: providerMigration,
         translationTestEngineFactory: translationTestEngineFactory
     )
+}
+
+private final class AppTestProviderMigration: ProviderMigrationProtocol,
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private let action: @Sendable () throws -> Void
+    private var storedCallCount = 0
+
+    init(action: @escaping @Sendable () throws -> Void) {
+        self.action = action
+    }
+
+    var callCount: Int { lock.withLock { storedCallCount } }
+
+    func migrate(settings: AppSettings) async throws {
+        lock.withLock { storedCallCount += 1 }
+        try action()
+    }
 }
 
 private enum AppTestError: Error {
