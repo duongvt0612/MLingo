@@ -52,6 +52,45 @@ func connectionTestUsesUnsavedProfileAndReplacementSecret() async throws {
 }
 
 @Test @MainActor
+func connectionTestReadsUnchangedSecretOnlyInsideProbe() async throws {
+    let credentialID = CredentialID("stored")
+    let profile = ProviderProfile(
+        name: "Remote",
+        kind: .custom,
+        endpoint: URL(string: "https://remote.example.com/v1")!,
+        apiStyle: .responses,
+        authentication: .bearer(credentialID: credentialID),
+        models: [.translation: ["model"]]
+    )
+    let credentials = SettingsProbeCredentialStore(values: [credentialID: "stored-secret"])
+    let probe = SettingsProbeSpy(result: ProviderConnectionTestResult(
+        succeeded: true,
+        message: "Connected",
+        models: []
+    ))
+    let editor = SettingsEditorViewModel(
+        snapshot: SettingsEditorSnapshot(
+            appSettings: AppSettings(),
+            configuration: ProviderConfiguration(profiles: [profile]),
+            overlaySelection: .automatic,
+            credentialPresence: [credentialID: true]
+        ),
+        credentialStore: credentials,
+        connectionProbe: probe
+    )
+
+    editor.startConnectionTest(profileID: profile.id)
+    try await settingsProbeEventually {
+        if case .success = editor.connectionTestState { return true }
+        return false
+    }
+
+    #expect(await probe.lastRequest()?.secret == "stored-secret")
+    #expect(editor.draft.credentialMutations[credentialID] == nil)
+    #expect(!String(describing: editor.connectionTestState).contains("stored-secret"))
+}
+
+@Test @MainActor
 func staleConnectionResultCannotOverwriteTheNewProfileResult() async throws {
     let first = OpenAICompatiblePresets.make(kind: .custom, name: "First", models: [.translation: ["a"]])
     let second = OpenAICompatiblePresets.make(kind: .custom, name: "Second", models: [.translation: ["b"]])

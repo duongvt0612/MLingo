@@ -20,6 +20,10 @@ struct ProviderSettingsView: View {
         .onChange(of: selection) { _, _ in
             editor.cancelConnectionTest()
         }
+        .onAppear { applyFocusRequest(editor.focusRequest) }
+        .onChange(of: editor.focusRequest) { _, request in
+            applyFocusRequest(request)
+        }
     }
 
     private var providerList: some View {
@@ -79,10 +83,22 @@ struct ProviderSettingsView: View {
             Label(kind.displayName, systemImage: kind.systemImage)
         }
     }
+
+    private func applyFocusRequest(_ request: SettingsFocusRequest?) {
+        switch request?.target {
+        case .provider(let profileID, _), .credential(let profileID):
+            selection = .profile(profileID)
+        case .capability:
+            selection = .assignments
+        default:
+            break
+        }
+    }
 }
 
 private struct CapabilityAssignmentsView: View {
     @Bindable var editor: SettingsEditorViewModel
+    @FocusState private var focusedCapability: ModelCapability?
     private let capabilities: [ModelCapability] = [
         .translation,
         .chat,
@@ -103,6 +119,10 @@ private struct CapabilityAssignmentsView: View {
         .formStyle(.grouped)
         .padding(12)
         .navigationTitle("Capability Assignments")
+        .onAppear { applyFocusRequest(editor.focusRequest) }
+        .onChange(of: editor.focusRequest) { _, request in
+            applyFocusRequest(request)
+        }
     }
 
     @ViewBuilder
@@ -117,6 +137,7 @@ private struct CapabilityAssignmentsView: View {
                     Text("Unavailable: \(unavailable.name)").tag(Optional(unavailable.id))
                 }
             }
+            .focused($focusedCapability, equals: capability)
 
             if let profile = selectedProfile(for: capability) {
                 Picker("Model", selection: modelBinding(for: capability)) {
@@ -183,6 +204,14 @@ private struct CapabilityAssignmentsView: View {
             else { return nil }
             return resolutionIssue.settingsMessage
         }.first
+    }
+
+    private func applyFocusRequest(_ request: SettingsFocusRequest?) {
+        guard case .capability(let capability) = request?.target else { return }
+        Task { @MainActor in
+            await Task.yield()
+            focusedCapability = capability
+        }
     }
 }
 
@@ -313,6 +342,10 @@ private struct ProviderProfileEditor: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(deletionMessage)
+        }
+        .onAppear { applyFocusRequest(editor.focusRequest) }
+        .onChange(of: editor.focusRequest) { _, request in
+            applyFocusRequest(request)
         }
     }
 
@@ -463,5 +496,36 @@ private struct ProviderProfileEditor: View {
             .contains(model) else { return }
         models.append(model)
         profile.wrappedValue.models[capability] = models
+    }
+
+    private func applyFocusRequest(_ request: SettingsFocusRequest?) {
+        let field: Field?
+        switch request?.target {
+        case .provider(let id, let issue) where id == profileID:
+            switch issue {
+            case .emptyName:
+                field = .name
+            case .missingEndpoint,
+                 .missingEndpointHost,
+                 .unsupportedEndpointScheme,
+                 .remoteEndpointRequiresHTTPS,
+                 .endpointContainsCredentials,
+                 .endpointContainsQueryOrFragment:
+                field = .endpoint
+            case .invalidCustomHeaderName:
+                field = .customHeader
+            case .emptyCredentialID:
+                field = .secret
+            }
+        case .credential(let id) where id == profileID:
+            field = .secret
+        default:
+            field = nil
+        }
+        guard let field else { return }
+        Task { @MainActor in
+            await Task.yield()
+            focusedField = field
+        }
     }
 }

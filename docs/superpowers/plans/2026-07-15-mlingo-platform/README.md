@@ -3,7 +3,8 @@
 **Design:** [Platform design](../../specs/2026-07-15-mlingo-platform-design.md)
 
 **Status:** Milestones 01-02 complete; Milestone 03 implementation complete with its
-loopback live proof deferred by owner waiver; Milestone 04 in progress.
+loopback live proof deferred by owner waiver; Milestone 04 code-complete with manual
+accessibility acceptance pending.
 **Execution rule:** Complete and verify one milestone before starting the next. The owner
 has explicitly waived the external loopback proof for Milestone 03 until Ollama or LM
 Studio is installed; the unchecked proof is not treated as passed.
@@ -62,3 +63,4 @@ Run a native Xcode Release build whenever a dependency, resource, entitlement, s
 - 2026-07-15: Milestone 03 still open. Preflight errors no longer leave stale Stop recovery; privacy copy uses resolved destination; transport sanitizes `x-request-id` via redactor; master status corrected to in-progress.
 - 2026-07-16: Milestone 03 implementation is code-complete. The production logging audit and redactor tests confirm request bodies, user text, bearer secrets, custom-header secrets, and unsafe request IDs are not emitted by default. The real loopback integration proof remains unchecked and deferred because neither Ollama nor LM Studio is installed. By explicit owner waiver, Milestone 04 may start without representing that external proof as passed.
 - 2026-07-16: Milestone 04 started. Work is scoped to transactional provider settings, independent capability assignments, native macOS Settings navigation, and accessibility acceptance.
+- 2026-07-16: Milestone 04 implementation is code-complete. Native eight-destination Settings, transactional provider/profile/Keychain persistence, draft connection probing, independent capability assignments, provider-based runtime readiness, deterministic validation/focus routing, and rollback recovery are implemented. The offline suite passes 260 tests; Release build and diff checks pass. Manual VoiceOver, keyboard-only, larger-text, appearance, and reduced-motion acceptance remains unchecked, so Milestone 04 is not yet marked complete.

@@ -171,6 +171,34 @@ struct SettingsDraftValidation: Equatable, Sendable {
     var isValid: Bool { issues.isEmpty }
 }
 
+enum SettingsFocusTarget: Equatable, Sendable {
+    case appSettings(AppSettingsField)
+    case provider(UUID, ProviderProfileValidationIssue)
+    case capability(ModelCapability)
+    case credential(UUID)
+
+    var destination: SettingsDestination {
+        switch self {
+        case .appSettings(.whisperModel):
+            .models
+        case .appSettings(.sourceLanguage), .appSettings(.targetLanguage):
+            .translation
+        case .appSettings(.subtitleFontName),
+             .appSettings(.subtitleFontSize),
+             .appSettings(.subtitleBackgroundOpacity),
+             .appSettings(.subtitleTextOpacity):
+            .subtitles
+        case .appSettings(.openAIModel), .provider, .capability, .credential:
+            .aiProviders
+        }
+    }
+}
+
+struct SettingsFocusRequest: Equatable, Sendable {
+    let generation: Int
+    let target: SettingsFocusTarget
+}
+
 struct SettingsEditorDraft: Equatable, Sendable {
     var appSettings: AppSettings
     var profiles: [ProviderProfileDraft]
@@ -195,8 +223,12 @@ struct SettingsEditorDraft: Equatable, Sendable {
     var validation: SettingsDraftValidation {
         let appValidation = AppSettingsValidation(settings: appSettings)
         let normalizedProfiles = profiles.map(\.normalizedProfile)
-        var issues = appValidation.errors.map {
-            SettingsDraftIssue.invalidAppSettings($0.key, $0.value)
+        var issues = AppSettingsField.allCases.compactMap { field -> SettingsDraftIssue? in
+            // ProviderConfiguration is canonical for translation models in M04.
+            guard field != .openAIModel, let message = appValidation.errors[field] else {
+                return nil
+            }
+            return .invalidAppSettings(field, message)
         }
 
         for profile in normalizedProfiles {

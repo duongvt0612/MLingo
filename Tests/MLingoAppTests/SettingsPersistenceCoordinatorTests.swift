@@ -69,6 +69,70 @@ func settingsFailureRollsBackProviderConfigurationAndCredential() async throws {
 }
 
 @Test
+func credentialFailureStopsBeforeProviderAndSettingsWrites() async throws {
+    let settingsStore = SettingsCoordinatorSettingsStore(settings: AppSettings())
+    let profileStore = SettingsCoordinatorProfileStore(configuration: ProviderConfiguration())
+    let credentialID = CredentialID("credential")
+    let credentialStore = SettingsCoordinatorCredentialStore(
+        saveFailures: [SettingsCoordinatorTestError.writeFailed]
+    )
+    let coordinator = SettingsPersistenceCoordinator(
+        settingsStore: settingsStore,
+        profileStore: profileStore,
+        credentialStore: credentialStore
+    )
+    let profile = settingsCoordinatorProfile(credentialID: credentialID)
+    var draft = SettingsEditorDraft(
+        appSettings: AppSettings(),
+        profiles: [ProviderProfileDraft(profile: profile, hasStoredCredential: false)],
+        selections: [.translation: CapabilitySelection(profileID: profile.id, model: "model")],
+        overlaySelection: .automatic
+    )
+    draft.credentialMutations[credentialID] = .replace("new")
+
+    await #expect(throws: SettingsPersistenceError.self) {
+        try await coordinator.commit(draft, activeCredentialID: nil)
+    }
+
+    #expect(await profileStore.saveCount() == 0)
+    #expect(await settingsStore.saveCount() == 0)
+    #expect(credentialStore.value(for: credentialID) == nil)
+}
+
+@Test
+func providerFailureRollsBackCredentialBeforeSettingsWrite() async throws {
+    let originalConfiguration = ProviderConfiguration()
+    let settingsStore = SettingsCoordinatorSettingsStore(settings: AppSettings())
+    let profileStore = SettingsCoordinatorProfileStore(
+        configuration: originalConfiguration,
+        saveFailures: [SettingsCoordinatorTestError.writeFailed]
+    )
+    let credentialID = CredentialID("credential")
+    let credentialStore = SettingsCoordinatorCredentialStore(values: [credentialID: "old"])
+    let coordinator = SettingsPersistenceCoordinator(
+        settingsStore: settingsStore,
+        profileStore: profileStore,
+        credentialStore: credentialStore
+    )
+    let profile = settingsCoordinatorProfile(credentialID: credentialID)
+    var draft = SettingsEditorDraft(
+        appSettings: AppSettings(),
+        profiles: [ProviderProfileDraft(profile: profile, hasStoredCredential: true)],
+        selections: [.translation: CapabilitySelection(profileID: profile.id, model: "model")],
+        overlaySelection: .automatic
+    )
+    draft.credentialMutations[credentialID] = .replace("new")
+
+    await #expect(throws: SettingsPersistenceError.self) {
+        try await coordinator.commit(draft, activeCredentialID: nil)
+    }
+
+    #expect(await profileStore.current() == originalConfiguration)
+    #expect(await settingsStore.saveCount() == 0)
+    #expect(credentialStore.value(for: credentialID) == "old")
+}
+
+@Test
 func rollbackFailureReportsPrimaryAndRollbackDescriptions() async throws {
     let settingsStore = SettingsCoordinatorSettingsStore(
         settings: AppSettings(),
@@ -103,6 +167,39 @@ func rollbackFailureReportsPrimaryAndRollbackDescriptions() async throws {
         #expect(primary.contains("write failed"))
         #expect(rollback?.contains("rollback failed") == true)
     }
+}
+
+@Test @MainActor
+func editorReloadsActualStoresWhenRollbackAlsoFails() async {
+    let originalSettings = AppSettings(sourceLanguage: "English")
+    let settingsStore = SettingsCoordinatorSettingsStore(
+        settings: originalSettings,
+        saveFailures: [
+            SettingsCoordinatorTestError.writeFailed,
+            SettingsCoordinatorTestError.rollbackFailed,
+        ]
+    )
+    let profileStore = SettingsCoordinatorProfileStore(configuration: ProviderConfiguration())
+    let coordinator = SettingsPersistenceCoordinator(
+        settingsStore: settingsStore,
+        profileStore: profileStore,
+        credentialStore: SettingsCoordinatorCredentialStore()
+    )
+    let editor = SettingsEditorViewModel(
+        snapshot: SettingsEditorSnapshot(
+            appSettings: originalSettings,
+            configuration: ProviderConfiguration(),
+            overlaySelection: .automatic,
+            credentialPresence: [:]
+        ),
+        persistenceCoordinator: coordinator
+    )
+    editor.draft.appSettings.sourceLanguage = "Japanese"
+
+    #expect(!(await editor.save()))
+
+    #expect(editor.draft.appSettings.sourceLanguage == "English")
+    #expect(editor.saveError?.contains("Rollback also failed") == true)
 }
 
 @Test
@@ -236,15 +333,21 @@ private actor SettingsCoordinatorSettingsStore: SettingsStoreProtocol {
 
 private actor SettingsCoordinatorProfileStore: ProviderProfileStoreProtocol {
     private var configuration: ProviderConfiguration
+    private var failures: [SettingsCoordinatorTestError]
     private var saves = 0
 
-    init(configuration: ProviderConfiguration) {
+    init(
+        configuration: ProviderConfiguration,
+        saveFailures: [SettingsCoordinatorTestError] = []
+    ) {
         self.configuration = configuration
+        failures = saveFailures
     }
 
     func load() async throws -> ProviderConfiguration { configuration }
     func save(_ configuration: ProviderConfiguration) async throws {
         saves += 1
+        if !failures.isEmpty { throw failures.removeFirst() }
         self.configuration = configuration
     }
 
@@ -257,9 +360,14 @@ private final class SettingsCoordinatorCredentialStore: ProviderCredentialStoreP
 {
     private let lock = NSLock()
     private var values: [CredentialID: String]
+    private var saveFailures: [SettingsCoordinatorTestError]
 
-    init(values: [CredentialID: String] = [:]) {
+    init(
+        values: [CredentialID: String] = [:],
+        saveFailures: [SettingsCoordinatorTestError] = []
+    ) {
         self.values = values
+        self.saveFailures = saveFailures
     }
 
     func loadCredential(for id: CredentialID) throws -> String? {
@@ -267,7 +375,10 @@ private final class SettingsCoordinatorCredentialStore: ProviderCredentialStoreP
     }
 
     func saveCredential(_ secret: String, for id: CredentialID) throws {
-        lock.withLock { values[id] = secret }
+        try lock.withLock {
+            if !saveFailures.isEmpty { throw saveFailures.removeFirst() }
+            values[id] = secret
+        }
     }
 
     func deleteCredential(for id: CredentialID) throws {

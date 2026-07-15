@@ -40,6 +40,7 @@ final class SettingsEditorViewModel {
     private(set) var connectionTestState: ConnectionTestState = .idle
     private(set) var isSaving = false
     private(set) var saveError: String?
+    private(set) var focusRequest: SettingsFocusRequest?
     @ObservationIgnored private let credentialStore: (any ProviderCredentialStoreProtocol)?
     @ObservationIgnored private let connectionProbe: (any ProviderConnectionProbing)?
     @ObservationIgnored private let persistenceCoordinator: SettingsPersistenceCoordinator?
@@ -122,6 +123,12 @@ final class SettingsEditorViewModel {
     @discardableResult
     func save() async -> Bool {
         guard !isSaving else { return false }
+        let validation = draft.validation
+        guard validation.isValid else {
+            routeToFirstIssue(validation.issues.first)
+            saveError = "Review the highlighted settings before saving."
+            return false
+        }
         guard let persistenceCoordinator else {
             saveError = "Settings persistence is unavailable."
             return false
@@ -226,5 +233,28 @@ final class SettingsEditorViewModel {
         connectionTask?.cancel()
         connectionTask = nil
         connectionTestState = .idle
+    }
+
+    private func routeToFirstIssue(_ issue: SettingsDraftIssue?) {
+        guard let issue else { return }
+        let target: SettingsFocusTarget
+        switch issue {
+        case .invalidAppSettings(let field, _):
+            target = .appSettings(field)
+        case .invalidProfile(let profileID, let validationIssue):
+            target = .provider(profileID, validationIssue)
+        case .invalidSelection(let capability, _):
+            target = .capability(capability)
+        case .emptyCredentialReplacement(let credentialID):
+            guard let profileID = draft.profiles.first(where: {
+                $0.credentialID == credentialID
+            })?.id else { return }
+            target = .credential(profileID)
+        }
+        selectedDestination = target.destination
+        focusRequest = SettingsFocusRequest(
+            generation: (focusRequest?.generation ?? 0) + 1,
+            target: target
+        )
     }
 }

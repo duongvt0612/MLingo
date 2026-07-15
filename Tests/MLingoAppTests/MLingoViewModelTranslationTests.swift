@@ -923,13 +923,26 @@ func providerSettingsEditorCommitUpdatesRuntimeAndOverlayAfterPersistence() asyn
     await viewModel.load()
     let editor = try await viewModel.makeSettingsEditor()
     editor.draft.appSettings.sourceLanguage = "Japanese"
+    editor.draft.appSettings.theme = .dark
+    editor.draft.appSettings.whisperModel = "mlx-community/whisper-small-mlx"
     editor.draft.overlaySelection = .display(id: "external")
+    let providerID = editor.addProfile(kind: .ollama)
+    let providerIndex = try #require(
+        editor.draft.profiles.firstIndex(where: { $0.id == providerID })
+    )
+    editor.draft.profiles[providerIndex].models[.translation] = ["qwen3:4b"]
+    editor.assign(profileID: providerID, to: .translation)
 
     #expect(await editor.save())
 
     #expect(viewModel.settings.sourceLanguage == "Japanese")
-    #expect(viewModel.whisperDiagnostics.modelID == viewModel.settings.whisperModel)
+    #expect(viewModel.settings.theme == .dark)
+    #expect(viewModel.whisperDiagnostics.modelID == "mlx-community/whisper-small-mlx")
     #expect(overlay.selectedDisplays == [.display(id: "external")])
+    try await appEventually {
+        viewModel.translationProviderReadiness
+            == .ready(profileName: "Ollama", model: "qwen3:4b")
+    }
 }
 
 @Test @MainActor

@@ -54,6 +54,24 @@ func settingsDraftNormalizesProfilesAndReportsUnavailableSelections() throws {
 }
 
 @Test
+func settingsDraftDoesNotValidateTheLegacyOpenAIModelField() {
+    var settings = AppSettings()
+    settings.openAIModel = "  "
+    let draft = SettingsEditorDraft(
+        appSettings: settings,
+        profiles: [],
+        selections: [:],
+        overlaySelection: .automatic
+    )
+
+    #expect(draft.validation.isValid)
+    #expect(!draft.validation.issues.contains(where: { issue in
+        guard case .invalidAppSettings(.openAIModel, _) = issue else { return false }
+        return true
+    }))
+}
+
+@Test
 func deletingProfileClearsSelectionsAndOnlyRemovesUnreferencedCredential() throws {
     let sharedCredential = CredentialID("shared")
     let first = ProviderProfile(
@@ -220,4 +238,25 @@ func capabilityAssignmentRequiresAnExplicitProfileAndCanBeCleared() throws {
 
     editor.assign(profileID: nil, to: .translation)
     #expect(editor.draft.selections[.translation] == nil)
+}
+
+
+@Test @MainActor
+func invalidSaveRoutesToAndRequestsFocusForTheFirstInvalidField() async {
+    var settings = AppSettings()
+    settings.whisperModel = ""
+    settings.sourceLanguage = ""
+    let editor = SettingsEditorViewModel(snapshot: SettingsEditorSnapshot(
+        appSettings: settings,
+        configuration: ProviderConfiguration(),
+        overlaySelection: .automatic,
+        credentialPresence: [:]
+    ))
+    editor.selectedDestination = .privacy
+
+    #expect(!(await editor.save()))
+
+    #expect(editor.selectedDestination == .models)
+    #expect(editor.focusRequest?.target == .appSettings(.whisperModel))
+    #expect(editor.saveError == "Review the highlighted settings before saving.")
 }

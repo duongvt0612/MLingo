@@ -54,6 +54,7 @@ private struct SettingsEditorContent: View {
     @Bindable var viewModel: MLingoViewModel
     @Bindable var editor: SettingsEditorViewModel
     let dismiss: () -> Void
+    @FocusState private var focusedAppField: AppSettingsField?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -76,6 +77,13 @@ private struct SettingsEditorContent: View {
         }
         .onDisappear {
             editor.cancelConnectionTest()
+        }
+        .onChange(of: editor.focusRequest) { _, request in
+            guard case .appSettings(let field) = request?.target else { return }
+            Task { @MainActor in
+                await Task.yield()
+                focusedAppField = field
+            }
         }
     }
 
@@ -148,6 +156,7 @@ private struct SettingsEditorContent: View {
             Section("Speech recognition") {
                 TextField("Whisper model ID", text: $editor.draft.appSettings.whisperModel)
                     .accessibilityLabel("Whisper model identifier")
+                    .focused($focusedAppField, equals: .whisperModel)
                 appValidationMessage(for: .whisperModel)
             }
             Section {
@@ -165,8 +174,10 @@ private struct SettingsEditorContent: View {
         Form {
             Section("Languages") {
                 TextField("Source language", text: $editor.draft.appSettings.sourceLanguage)
+                    .focused($focusedAppField, equals: .sourceLanguage)
                 appValidationMessage(for: .sourceLanguage)
                 TextField("Target language", text: $editor.draft.appSettings.targetLanguage)
+                    .focused($focusedAppField, equals: .targetLanguage)
                 appValidationMessage(for: .targetLanguage)
             }
             Section("Provider assignment") {
@@ -206,6 +217,7 @@ private struct SettingsEditorContent: View {
 
             Section("Typography") {
                 TextField("Font name", text: $editor.draft.appSettings.subtitleFontName)
+                    .focused($focusedAppField, equals: .subtitleFontName)
                 appValidationMessage(for: .subtitleFontName)
                 settingsSlider(
                     "Font size",
@@ -215,6 +227,7 @@ private struct SettingsEditorContent: View {
                     minimum: "18",
                     maximum: "64"
                 )
+                .focused($focusedAppField, equals: .subtitleFontSize)
                 appValidationMessage(for: .subtitleFontSize)
             }
 
@@ -227,6 +240,7 @@ private struct SettingsEditorContent: View {
                     minimum: "20%",
                     maximum: "90%"
                 )
+                .focused($focusedAppField, equals: .subtitleBackgroundOpacity)
                 appValidationMessage(for: .subtitleBackgroundOpacity)
                 settingsSlider(
                     "Text opacity",
@@ -236,6 +250,7 @@ private struct SettingsEditorContent: View {
                     minimum: "0%",
                     maximum: "100%"
                 )
+                .focused($focusedAppField, equals: .subtitleTextOpacity)
                 appValidationMessage(for: .subtitleTextOpacity)
             }
         }
@@ -311,7 +326,7 @@ private struct SettingsEditorContent: View {
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
-            .disabled(editor.isSaving || !editor.draft.validation.isValid)
+            .disabled(editor.isSaving)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
