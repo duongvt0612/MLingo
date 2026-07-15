@@ -106,6 +106,8 @@ final class MLingoViewModel {
     private var activeTranslationProviderKind: ProviderKind?
     /// Provider endpoint from the same immutable selection used by the active session.
     private var activeTranslationProviderEndpoint: URL?
+    /// Credential currently used by the active/preparing translation session.
+    private var activeTranslationCredentialID: CredentialID?
 
     init(
         settings: AppSettings,
@@ -219,6 +221,37 @@ final class MLingoViewModel {
                 present(error)
             }
         }
+    }
+
+    func makeSettingsEditor() async throws -> SettingsEditorViewModel {
+        guard let profileStore, let credentialStore else {
+            throw MLingoError.invalidTranslationConfiguration(
+                "Provider settings storage is unavailable."
+            )
+        }
+        let persistence = SettingsPersistenceCoordinator(
+            settingsStore: settingsStore,
+            profileStore: profileStore,
+            credentialStore: credentialStore
+        )
+        let snapshot = try await persistence.load(
+            overlaySelection: overlayPresentationState.selectedDisplay
+        )
+        return SettingsEditorViewModel(
+            snapshot: snapshot,
+            credentialStore: credentialStore,
+            connectionProbe: OpenAICompatibleConnectionProbe(),
+            persistenceCoordinator: persistence,
+            activeCredentialID: { [weak self] in
+                self?.activeTranslationCredentialID
+            },
+            applyOverlay: { [weak self] selection in
+                self?.pipeline.selectOverlayDisplay(selection)
+            },
+            onCommit: { [weak self] snapshot in
+                self?.applyCommittedSettings(snapshot)
+            }
+        )
     }
 
     @discardableResult
@@ -417,6 +450,7 @@ final class MLingoViewModel {
 
                 self.activeTranslationProviderKind = selection.profile.kind
                 self.activeTranslationProviderEndpoint = selection.profile.endpoint
+                self.activeTranslationCredentialID = selection.profile.authentication.credentialID
                 self.applyTranslationDestination(from: selection.profile)
                 try self.ensureCredentialPresent(for: selection.profile.authentication)
                 try Task.checkCancellation()
@@ -437,12 +471,16 @@ final class MLingoViewModel {
                     self.status = "Stopped"
                     self.activeTranslationProviderKind = nil
                     self.activeTranslationProviderEndpoint = nil
+                    self.activeTranslationCredentialID = nil
                     self.startTask = nil
                 }
             } catch {
                 if self.isCurrentSession(sessionID, mode: .preparingTranslation) {
                     // Return to idle before presenting so recovery does not offer Stop.
                     self.activeMode = .idle
+                    self.activeTranslationProviderKind = nil
+                    self.activeTranslationProviderEndpoint = nil
+                    self.activeTranslationCredentialID = nil
                     self.startTask = nil
                     self.status = "Settings need attention"
                     self.present(error)
@@ -563,6 +601,7 @@ final class MLingoViewModel {
         activeMode = .idle
         activeTranslationProviderKind = nil
         activeTranslationProviderEndpoint = nil
+        activeTranslationCredentialID = nil
         status = statusAfterStop
         errorRecoveryActions.removeAll { $0 == .stopTranslation }
     }
@@ -792,6 +831,23 @@ final class MLingoViewModel {
         transcriptionEntries.append(TranscriptLogEntry(transcript: trimmedTranscript))
         if transcriptionEntries.count > 500 {
             transcriptionEntries.removeFirst(transcriptionEntries.count - 500)
+        }
+    }
+
+    private func applyCommittedSettings(_ snapshot: SettingsEditorSnapshot) {
+        settings = snapshot.appSettings
+        whisperDiagnostics.modelID = snapshot.appSettings.whisperModel
+        if let credentialStore {
+            let storedAPIKey = (try? credentialStore.loadCredential(
+                for: ProviderDefaults.openAICredentialID
+            )) ?? nil
+            apiKey = storedAPIKey ?? ""
+            credentialState = apiKey.isEmpty ? .notStored : .stored
+        }
+        status = "Settings saved"
+        clearError()
+        Task { @MainActor [weak self] in
+            await self?.refreshTranslationDestinationDescription()
         }
     }
 

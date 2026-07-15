@@ -165,6 +165,41 @@ func emptyCredentialReplacementIsRejectedWithoutWrites() async throws {
     #expect(credentialStore.value(for: credentialID) == nil)
 }
 
+@Test @MainActor
+func settingsEditorAppliesOverlayAndRuntimeSnapshotOnlyAfterCommit() async throws {
+    let settingsStore = SettingsCoordinatorSettingsStore(settings: AppSettings())
+    let profileStore = SettingsCoordinatorProfileStore(configuration: ProviderConfiguration())
+    let credentialStore = SettingsCoordinatorCredentialStore()
+    let coordinator = SettingsPersistenceCoordinator(
+        settingsStore: settingsStore,
+        profileStore: profileStore,
+        credentialStore: credentialStore
+    )
+    var appliedOverlays: [OverlayDisplaySelection] = []
+    var committedSnapshots: [SettingsEditorSnapshot] = []
+    let editor = SettingsEditorViewModel(
+        snapshot: SettingsEditorSnapshot(
+            appSettings: AppSettings(),
+            configuration: ProviderConfiguration(),
+            overlaySelection: .automatic,
+            credentialPresence: [:]
+        ),
+        persistenceCoordinator: coordinator,
+        activeCredentialID: { nil },
+        applyOverlay: { appliedOverlays.append($0) },
+        onCommit: { committedSnapshots.append($0) }
+    )
+    editor.draft.appSettings.sourceLanguage = "Japanese"
+    editor.draft.overlaySelection = .display(id: "display-2")
+
+    #expect(await editor.save())
+
+    #expect(appliedOverlays == [.display(id: "display-2")])
+    #expect(committedSnapshots.map(\.appSettings.sourceLanguage) == ["Japanese"])
+    #expect(editor.snapshot.appSettings.sourceLanguage == "Japanese")
+    #expect(editor.saveError == nil)
+}
+
 private enum SettingsCoordinatorTestError: LocalizedError {
     case writeFailed
     case rollbackFailed

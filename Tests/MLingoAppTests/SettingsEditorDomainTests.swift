@@ -132,3 +132,67 @@ func settingsEditorRoutesDestinationsAndDiscardRestoresItsSnapshot() {
     #expect(editor.draft.profiles[0].hasStoredCredential)
     #expect(editor.draft.credentialMutations.isEmpty)
 }
+
+@Test @MainActor
+func settingsEditorAddsRemotePresetsWithoutChangingTheCommittedSnapshot() throws {
+    let editor = SettingsEditorViewModel(snapshot: SettingsEditorSnapshot(
+        appSettings: AppSettings(),
+        configuration: ProviderConfiguration(),
+        overlaySelection: .automatic,
+        credentialPresence: [:]
+    ))
+
+    let profileID = editor.addProfile(kind: .ollama)
+    let profile = try #require(editor.draft.profiles.first(where: { $0.id == profileID }))
+
+    #expect(profile.name == "Ollama")
+    #expect(profile.endpoint == "http://127.0.0.1:11434/v1")
+    #expect(profile.apiStyle == .chatCompletions)
+    #expect(editor.snapshot.configuration.profiles.isEmpty)
+}
+
+@Test @MainActor
+func newlyAddedOpenAIProfilesReceiveIndependentCredentialReferences() throws {
+    let editor = SettingsEditorViewModel(snapshot: SettingsEditorSnapshot(
+        appSettings: AppSettings(),
+        configuration: ProviderConfiguration(),
+        overlaySelection: .automatic,
+        credentialPresence: [:]
+    ))
+
+    let firstID = editor.addProfile(kind: .openAI)
+    let secondID = editor.addProfile(kind: .openAI)
+    let first = try #require(editor.draft.profiles.first(where: { $0.id == firstID }))
+    let second = try #require(editor.draft.profiles.first(where: { $0.id == secondID }))
+
+    #expect(first.credentialID != ProviderDefaults.openAICredentialID)
+    #expect(second.credentialID != ProviderDefaults.openAICredentialID)
+    #expect(first.credentialID != second.credentialID)
+}
+
+@Test @MainActor
+func capabilityAssignmentRequiresAnExplicitProfileAndCanBeCleared() throws {
+    let profile = ProviderProfile(
+        name: "Local",
+        kind: .ollama,
+        endpoint: URL(string: "http://127.0.0.1:11434/v1")!,
+        apiStyle: .chatCompletions,
+        authentication: .none,
+        models: [.translation: ["first", "second"]]
+    )
+    let editor = SettingsEditorViewModel(snapshot: SettingsEditorSnapshot(
+        appSettings: AppSettings(),
+        configuration: ProviderConfiguration(profiles: [profile]),
+        overlaySelection: .automatic,
+        credentialPresence: [:]
+    ))
+
+    editor.assign(profileID: profile.id, to: .translation)
+    #expect(editor.draft.selections[.translation] == CapabilitySelection(
+        profileID: profile.id,
+        model: "first"
+    ))
+
+    editor.assign(profileID: nil, to: .translation)
+    #expect(editor.draft.selections[.translation] == nil)
+}

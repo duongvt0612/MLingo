@@ -843,6 +843,31 @@ func savingSettingsPersistsOverlayDisplaySelectionWhileIdle() async {
 }
 
 @Test @MainActor
+func providerSettingsEditorCommitUpdatesRuntimeAndOverlayAfterPersistence() async throws {
+    let settingsStore = AppTestSettingsStore(settings: AppSettings(sourceLanguage: "English"))
+    let profileStore = AppTestProfileStore(configuration: ProviderConfiguration())
+    let credentialStore = AppTestCredentialStore()
+    let overlay = AppTestOverlayEngine()
+    let viewModel = makeViewModel(
+        settingsStore: settingsStore,
+        overlayEngine: overlay,
+        profileStore: profileStore,
+        credentialStore: credentialStore,
+        translationTestEngineFactory: { _ in AppTestTranslationEngine() }
+    )
+    await viewModel.load()
+    let editor = try await viewModel.makeSettingsEditor()
+    editor.draft.appSettings.sourceLanguage = "Japanese"
+    editor.draft.overlaySelection = .display(id: "external")
+
+    #expect(await editor.save())
+
+    #expect(viewModel.settings.sourceLanguage == "Japanese")
+    #expect(viewModel.whisperDiagnostics.modelID == viewModel.settings.whisperModel)
+    #expect(overlay.selectedDisplays == [.display(id: "external")])
+}
+
+@Test @MainActor
 func viewModelExposesOverlayStateAndRoutesLiveOverlayActions() async throws {
     let overlay = AppTestOverlayEngine()
     let viewModel = makeViewModel(

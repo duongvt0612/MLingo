@@ -38,19 +38,33 @@ final class SettingsEditorViewModel {
     var draft: SettingsEditorDraft
     private(set) var snapshot: SettingsEditorSnapshot
     private(set) var connectionTestState: ConnectionTestState = .idle
+    private(set) var isSaving = false
+    private(set) var saveError: String?
     @ObservationIgnored private let credentialStore: (any ProviderCredentialStoreProtocol)?
     @ObservationIgnored private let connectionProbe: (any ProviderConnectionProbing)?
+    @ObservationIgnored private let persistenceCoordinator: SettingsPersistenceCoordinator?
+    @ObservationIgnored private let activeCredentialID: @MainActor () -> CredentialID?
+    @ObservationIgnored private let applyOverlay: @MainActor (OverlayDisplaySelection) -> Void
+    @ObservationIgnored private let onCommit: @MainActor (SettingsEditorSnapshot) -> Void
     @ObservationIgnored private var connectionTask: Task<Void, Never>?
     @ObservationIgnored private var connectionGeneration = 0
 
     init(
         snapshot: SettingsEditorSnapshot,
         credentialStore: (any ProviderCredentialStoreProtocol)? = nil,
-        connectionProbe: (any ProviderConnectionProbing)? = nil
+        connectionProbe: (any ProviderConnectionProbing)? = nil,
+        persistenceCoordinator: SettingsPersistenceCoordinator? = nil,
+        activeCredentialID: @escaping @MainActor () -> CredentialID? = { nil },
+        applyOverlay: @escaping @MainActor (OverlayDisplaySelection) -> Void = { _ in },
+        onCommit: @escaping @MainActor (SettingsEditorSnapshot) -> Void = { _ in }
     ) {
         self.snapshot = snapshot
         self.credentialStore = credentialStore
         self.connectionProbe = connectionProbe
+        self.persistenceCoordinator = persistenceCoordinator
+        self.activeCredentialID = activeCredentialID
+        self.applyOverlay = applyOverlay
+        self.onCommit = onCommit
         draft = snapshot.makeDraft()
     }
 
@@ -67,6 +81,76 @@ final class SettingsEditorViewModel {
     func acceptCommittedSnapshot(_ snapshot: SettingsEditorSnapshot) {
         self.snapshot = snapshot
         draft = snapshot.makeDraft()
+    }
+
+    @discardableResult
+    func addProfile(kind: ProviderKind) -> UUID {
+        var profile = OpenAICompatiblePresets.make(kind: kind)
+        if kind == .openAI {
+            profile.authentication = .bearer(
+                credentialID: ProviderProfileDraft.defaultCredentialID(for: profile.id)
+            )
+        }
+        draft.profiles.append(
+            ProviderProfileDraft(profile: profile, hasStoredCredential: false)
+        )
+        return profile.id
+    }
+
+    func assign(profileID: UUID?, to capability: ModelCapability) {
+        guard let profileID else {
+            draft.selections[capability] = nil
+            return
+        }
+        guard let profile = draft.profiles.first(where: { $0.id == profileID }),
+              let model = profile.normalizedProfile.models[capability]?.first
+        else {
+            draft.selections[capability] = nil
+            return
+        }
+        draft.selections[capability] = CapabilitySelection(
+            profileID: profileID,
+            model: model
+        )
+    }
+
+    func deleteProfile(id: UUID) {
+        cancelConnectionTest()
+        draft.deleteProfile(id: id)
+    }
+
+    @discardableResult
+    func save() async -> Bool {
+        guard !isSaving else { return false }
+        guard let persistenceCoordinator else {
+            saveError = "Settings persistence is unavailable."
+            return false
+        }
+
+        isSaving = true
+        saveError = nil
+        defer { isSaving = false }
+
+        do {
+            let committed = try await persistenceCoordinator.commit(
+                draft,
+                activeCredentialID: activeCredentialID()
+            )
+            applyOverlay(committed.overlaySelection)
+            onCommit(committed)
+            acceptCommittedSnapshot(committed)
+            return true
+        } catch {
+            saveError = error.localizedDescription
+            if case SettingsPersistenceError.transactionFailed(_, let rollback) = error,
+               rollback != nil,
+               let actual = try? await persistenceCoordinator.load(
+                   overlaySelection: snapshot.overlaySelection
+               ) {
+                acceptCommittedSnapshot(actual)
+            }
+            return false
+        }
     }
 
     func startConnectionTest(profileID: UUID) {
