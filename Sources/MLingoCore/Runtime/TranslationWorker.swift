@@ -148,12 +148,18 @@ actor TranslationWorker {
                 await observers.onDiscarded(item.request.current.id, false, false)
                 return
             } catch {
-                guard !isCancelled, !Task.isCancelled else { return }
+                guard !isCancelled, !Task.isCancelled else {
+                    await observers.onDiscarded(item.request.current.id, false, false)
+                    return
+                }
                 await handleTranslationFailure(error, item: item)
                 continue
             }
 
-            guard !isCancelled, !Task.isCancelled else { return }
+            guard !isCancelled, !Task.isCancelled else {
+                await observers.onDiscarded(item.request.current.id, false, false)
+                return
+            }
             await observers.onFinished(item.request.current.id)
             do {
                 _ = try await eventHub.publish(

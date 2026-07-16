@@ -150,7 +150,12 @@ struct PerformanceBenchmarkTests {
             print("Skipping stability benchmark because the MLX runtime could not start")
             return
         }
-        try await Task.sleep(for: .seconds(duration))
+        do {
+            try await Task.sleep(for: .seconds(duration))
+        } catch {
+            await runtime.stop(reason: .cancelled)
+            throw error
+        }
         await runtime.stop(reason: .cancelled)
 
         let recordedDiagnostics = await recorder.values.filter {

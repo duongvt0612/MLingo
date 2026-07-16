@@ -75,12 +75,50 @@ func translationWorkerReportsEventHubFailureAsFatal() async throws {
         traceID: TraceID(rawValue: UUID()),
         payload: TranscriptCompleted(transcript: Transcript(text: "One", timestamp: 0))
     )
+    let expectedError = MLingoError.translationFailed("Event hub publication failed.")
 
     await worker.submit(envelope)
-    try await workerEventually { await fatalErrors.count == 1 }
+    try await workerEventually { await fatalErrors.latest == expectedError }
 
-    #expect(await fatalErrors.count == 1)
+    #expect(await fatalErrors.latest == expectedError)
     await worker.cancel()
+}
+
+@Test
+func cancelledTranslationWorkerDiscardsActiveItemAfterResultOrFailure() async throws {
+    for outcome in WorkerBlockingOutcome.allCases {
+        let hub = TypedEventHub()
+        let engine = BlockingWorkerTranslationEngine(outcome: outcome)
+        let discarded = WorkerDiscardRecorder()
+        let sessionID = SessionID(rawValue: UUID())
+        let transcript = Transcript(text: "Cancel me", timestamp: 0)
+        let worker = TranslationWorker(
+            translationEngine: engine,
+            settings: AppSettings(),
+            selection: nil,
+            eventHub: hub,
+            sessionID: sessionID,
+            observers: TranslationWorkerObservers(
+                onDiscarded: { id, _, _ in await discarded.append(id) }
+            )
+        )
+        let envelope = EventEnvelope(
+            id: EventID(rawValue: UUID()),
+            sessionID: sessionID,
+            sequence: 1,
+            timestamp: Date(),
+            traceID: TraceID(rawValue: UUID()),
+            payload: TranscriptCompleted(transcript: transcript)
+        )
+
+        await worker.submit(envelope)
+        try await workerEventually { await engine.started }
+        await worker.cancel()
+        await engine.release()
+        try await workerEventually { await discarded.ids == [transcript.id] }
+
+        #expect(await discarded.ids == [transcript.id])
+    }
 }
 
 private actor WorkerTranslationEngine: TranslationEngineProtocol {
@@ -110,7 +148,52 @@ private actor WorkerCompletionRecorder {
 private actor WorkerErrorRecorder {
     private var values: [MLingoError] = []
     var count: Int { values.count }
+    var latest: MLingoError? { values.last }
     func append(_ error: MLingoError) { values.append(error) }
+}
+
+private enum WorkerBlockingOutcome: CaseIterable, Sendable {
+    case success
+    case failure
+}
+
+private actor BlockingWorkerTranslationEngine: TranslationEngineProtocol {
+    private let outcome: WorkerBlockingOutcome
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var started = false
+
+    init(outcome: WorkerBlockingOutcome) {
+        self.outcome = outcome
+    }
+
+    func translate(_ request: TranslationRequest, settings: AppSettings) async throws -> SubtitleItem {
+        started = true
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+        if outcome == .failure {
+            throw MLingoError.translationFailed("Cancelled fixture failure")
+        }
+        return SubtitleItem(
+            original: request.current.text,
+            translated: "translated \(request.current.text)",
+            start: request.current.timestamp,
+            end: request.current.timestamp + 2
+        )
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private actor WorkerDiscardRecorder {
+    private(set) var ids: [UUID] = []
+
+    func append(_ id: UUID) {
+        ids.append(id)
+    }
 }
 
 private func workerEventually(

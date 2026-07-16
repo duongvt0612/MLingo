@@ -211,6 +211,37 @@ func orchestratorProxiesOverlayCommandsOnlyDuringTranslationSession() async {
 }
 
 @Test @MainActor
+func orchestratorRejectsOverlayCommandsUntilTranslationSessionStarted() async throws {
+    let audio = PipelineAudioEngine()
+    let overlay = PipelineOverlayEngine()
+    let settings = BlockingPipelineSettingsStore()
+    let runtime = SessionOrchestrator(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: PipelineWhisperEngine(text: "unused"),
+        translationEngine: PipelineTranslationEngine(),
+        overlayEngine: overlay,
+        settingsStore: settings
+    )
+
+    let startTask = Task { @MainActor in
+        await runtime.start(kind: .translation, onError: { _ in })
+    }
+    try await orchestratorEventually { await settings.loadStarted }
+
+    runtime.setOverlayVisible(false)
+    runtime.beginOverlayRepositioning()
+    runtime.endOverlayRepositioning()
+    runtime.resetOverlayPosition()
+    runtime.selectOverlayDisplay(.automatic)
+
+    #expect(overlay.commandCount == 1)
+
+    await settings.releaseLoad()
+    #expect(await startTask.value)
+    await runtime.stop()
+}
+
+@Test @MainActor
 func translationModeReceivesOnlyTextAfterFuzzyOverlap() async throws {
     let audio = PipelineAudioEngine()
     let whisper = PipelineScriptedWhisperEngine(texts: [
@@ -573,7 +604,10 @@ func orchestratorPublishesOrderedLifecycleAndPropagatesWhisperTrace() async thro
     try await orchestratorEventually { await recorder.endedCount == 1 }
 
     #expect(started)
-    #expect(await recorder.sequences == [1, 2, 3, 4])
+    #expect(await recorder.startedSequences == [1])
+    #expect(await recorder.transcriptSequences == [2])
+    #expect(await recorder.translationSequences == [3])
+    #expect(await recorder.endedSequences == [4])
     #expect(await recorder.startedKinds == [.translation])
     #expect(await recorder.transcriptTraceIDs == recorder.translationTraceIDs)
     #expect(await recorder.endReasons == [.cancelled])
@@ -607,9 +641,49 @@ func startupFailureDoesNotPublishLifecycleFacts() async throws {
     let started = await runtime.start(kind: .translation, onError: { _ in })
 
     #expect(!started)
-    #expect(await recorder.sequences.isEmpty)
+    #expect(await recorder.startedSequences.isEmpty)
+    #expect(await recorder.transcriptSequences.isEmpty)
+    #expect(await recorder.translationSequences.isEmpty)
+    #expect(await recorder.endedSequences.isEmpty)
     #expect(await recorder.endedCount == 0)
     for token in tokens { await hub.cancel(token) }
+}
+
+@Test @MainActor
+func automaticRuntimeFailureNotifiesEndedHandlerExactlyOnce() async throws {
+    let hub = TypedEventHub()
+    let audio = PipelineAudioEngine()
+    let endReasons = PipelineEndReasonRecorder()
+    let runtime = SessionOrchestrator(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: PipelineWhisperEngine(text: "Failure after start"),
+        translationEngine: PipelineTranslationEngine(),
+        overlayEngine: PipelineOverlayEngine(),
+        settingsStore: PipelineSettingsStore(),
+        processMetricsSampler: DarwinProcessMetricsSampler(),
+        now: { .now },
+        eventHub: hub
+    )
+
+    let started = await runtime.start(
+        kind: .translation,
+        translationSelection: nil,
+        handlers: SessionRuntimeHandlers(
+            onError: { _ in },
+            onEnded: { endReasons.append($0) }
+        )
+    )
+    #expect(started)
+
+    await hub.shutdown()
+    audio.yield(orchestratorAudioChunk(timestamp: 0))
+    try await orchestratorEventually {
+        await MainActor.run { endReasons.count == 1 }
+    }
+    audio.yield(orchestratorAudioChunk(timestamp: 3))
+    try await Task.sleep(for: .milliseconds(30))
+
+    #expect(endReasons.values == [.failed])
 }
 
 @Test @MainActor
@@ -699,12 +773,10 @@ private actor OrchestratorEventRecorder {
     private var translations: [EventEnvelope<TranslationCompleted>] = []
     private var ended: [EventEnvelope<SessionEnded>] = []
 
-    var sequences: [UInt64] {
-        (started.map(\.sequence)
-            + transcripts.map(\.sequence)
-            + translations.map(\.sequence)
-            + ended.map(\.sequence)).sorted()
-    }
+    var startedSequences: [UInt64] { started.map(\.sequence) }
+    var transcriptSequences: [UInt64] { transcripts.map(\.sequence) }
+    var translationSequences: [UInt64] { translations.map(\.sequence) }
+    var endedSequences: [UInt64] { ended.map(\.sequence) }
     var startedKinds: [SessionKind] { started.map(\.payload.kind) }
     var transcriptTraceIDs: [TraceID] { transcripts.map(\.traceID) }
     var translationTraceIDs: [TraceID] { translations.map(\.traceID) }
@@ -957,6 +1029,26 @@ private actor PipelineSettingsStore: SettingsStoreProtocol {
     func save(_ settings: AppSettings) async throws { self.settings = settings }
 }
 
+private actor BlockingPipelineSettingsStore: SettingsStoreProtocol {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var loadStarted = false
+
+    func load() async throws -> AppSettings {
+        loadStarted = true
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+        return AppSettings()
+    }
+
+    func save(_ settings: AppSettings) async throws {}
+
+    func releaseLoad() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 private actor PipelineTranscriptRecorder {
     private var values: [Transcript] = []
     var count: Int { values.count }
@@ -985,6 +1077,16 @@ private final class PipelineErrorRecorder: @unchecked Sendable {
 
     func append(_ error: MLingoError) {
         lock.withLock { values.append(error) }
+    }
+}
+
+@MainActor
+private final class PipelineEndReasonRecorder {
+    private(set) var values: [SessionEndReason] = []
+    var count: Int { values.count }
+
+    func append(_ reason: SessionEndReason) {
+        values.append(reason)
     }
 }
 

@@ -816,6 +816,14 @@ final class MLingoViewModel {
                             guard self?.activeSessionID == sessionID else { return }
                             self?.performanceDiagnostics = diagnostics
                         }
+                    },
+                    onEnded: { [weak self, sessionID] reason in
+                        guard self?.activeSessionID == sessionID else { return }
+                        self?.activeMode = .idle
+                        self?.activeTranslationProviderKind = nil
+                        self?.activeTranslationProviderEndpoint = nil
+                        self?.errorRecoveryActions.removeAll { $0 == .stopTranslation }
+                        self?.status = reason == .failed ? "Needs attention" : "Stopped"
                     }
                 )
             )

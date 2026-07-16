@@ -1036,6 +1036,30 @@ func viewModelExposesOverlayStateAndRoutesLiveOverlayActions() async throws {
 }
 
 @MainActor
+@Test func MLingoViewModelRuntimeIgnoresStaleEndedCallbackAndIdlesCurrentSession() async throws {
+    let runtime = AppSessionRuntimeSpy()
+    let viewModel = makeViewModel(
+        runtime: runtime,
+        translationTestEngineFactory: { _ in AppTestTranslationEngine() }
+    )
+
+    viewModel.startTranscriptionTest()
+    try await appEventually { runtime.receivedHandlers.count == 1 }
+    let firstHandlers = runtime.receivedHandlers[0]
+    viewModel.stopTranscriptionTest()
+    try await appEventually { viewModel.activeMode == .idle }
+
+    viewModel.startTranscriptionTest()
+    try await appEventually { runtime.receivedHandlers.count == 2 }
+    firstHandlers.onEnded(.failed)
+    #expect(viewModel.activeMode == .transcriptionTest)
+
+    runtime.receivedHandlers[1].onEnded(.failed)
+    #expect(viewModel.activeMode == .idle)
+    #expect(viewModel.status == "Needs attention")
+}
+
+@MainActor
 @Test func MLingoViewModelRuntimeKeepsSoundTestOutsideRuntime() async throws {
     let runtime = AppSessionRuntimeSpy()
     let audioFactory = AppTestAudioFactory()
@@ -1096,6 +1120,7 @@ private final class AppSessionRuntimeSpy: SessionRuntimeProtocol {
     let overlayPresentationState = OverlayPresentationState()
     private(set) var startedKinds: [SessionKind] = []
     private(set) var stopReasons: [SessionEndReason] = []
+    private(set) var receivedHandlers: [SessionRuntimeHandlers] = []
 
     func start(
         kind: SessionKind,
@@ -1103,6 +1128,7 @@ private final class AppSessionRuntimeSpy: SessionRuntimeProtocol {
         handlers: SessionRuntimeHandlers
     ) async -> Bool {
         startedKinds.append(kind)
+        receivedHandlers.append(handlers)
         return true
     }
 

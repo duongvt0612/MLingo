@@ -8,6 +8,7 @@ public final class SessionOrchestrator: SessionRuntimeProtocol {
     public typealias PerformanceDiagnosticsHandler = @Sendable (
         PipelinePerformanceDiagnostics
     ) async -> Void
+    public typealias EndHandler = @MainActor @Sendable (SessionEndReason) -> Void
 
     private let audioEngineFactory: any AudioEngineFactoryProtocol
     private let translationEngine: TranslationEngineProtocol
@@ -32,6 +33,7 @@ public final class SessionOrchestrator: SessionRuntimeProtocol {
     private var subscriptionTokens: [SubscriptionToken] = []
     private var translationWorker: TranslationWorker?
     private var translatedSubtitleSink: TranslatedSubtitleSink?
+    private var runtimeEndedHandler: EndHandler?
 
     public var overlayPresentationState: OverlayPresentationState {
         overlayEngine.presentationState
@@ -99,7 +101,8 @@ public final class SessionOrchestrator: SessionRuntimeProtocol {
             onAudioDiagnostics: handlers.onAudioDiagnostics,
             onTranscript: handlers.onTranscript,
             onWhisperDiagnostics: handlers.onWhisperDiagnostics,
-            onPerformanceDiagnostics: handlers.onPerformanceDiagnostics
+            onPerformanceDiagnostics: handlers.onPerformanceDiagnostics,
+            onEnded: handlers.onEnded
         )
     }
 
@@ -112,7 +115,8 @@ public final class SessionOrchestrator: SessionRuntimeProtocol {
         onAudioDiagnostics: (@Sendable (AudioCaptureDiagnostics) async -> Void)? = nil,
         onTranscript: @escaping TranscriptHandler = { _ in },
         onWhisperDiagnostics: @escaping WhisperDiagnosticsHandler = { _ in },
-        onPerformanceDiagnostics: @escaping PerformanceDiagnosticsHandler = { _ in }
+        onPerformanceDiagnostics: @escaping PerformanceDiagnosticsHandler = { _ in },
+        onEnded: @escaping EndHandler = { _ in }
     ) async -> Bool {
         MLingoLogger.pipeline.info("Starting session orchestrator")
         await stop(reason: .cancelled)
@@ -121,6 +125,7 @@ public final class SessionOrchestrator: SessionRuntimeProtocol {
         sessionID = newSessionID
         sessionStarted = false
         activeMode = kind
+        runtimeEndedHandler = onEnded
         let tracker = PipelinePerformanceTracker(now: now)
         performanceTracker = tracker
         let diagnosticsSubscriber = SessionDiagnosticsSubscriber(
@@ -261,9 +266,15 @@ public final class SessionOrchestrator: SessionRuntimeProtocol {
     }
 
     public func stop(reason: SessionEndReason) async {
+        await stop(reason: reason, notifyEnded: false)
+    }
+
+    private func stop(reason: SessionEndReason, notifyEnded: Bool) async {
         MLingoLogger.pipeline.info("Stopping session orchestrator")
         let stoppedSessionID = sessionID
         let shouldPublishSessionEnd = sessionStarted
+        let stoppedEndedHandler = notifyEnded ? runtimeEndedHandler : nil
+        runtimeEndedHandler = nil
         sessionID = nil
         sessionStarted = false
         activeMode = nil
@@ -314,26 +325,27 @@ public final class SessionOrchestrator: SessionRuntimeProtocol {
                 )
             }
         }
+        stoppedEndedHandler?(reason)
         MLingoLogger.pipeline.info("Session orchestrator stopped")
     }
 
     public func setOverlayVisible(_ isVisible: Bool) {
-        guard activeMode == .translation else { return }
+        guard activeMode == .translation, sessionStarted else { return }
         overlayEngine.setVisible(isVisible)
     }
 
     public func beginOverlayRepositioning() {
-        guard activeMode == .translation else { return }
+        guard activeMode == .translation, sessionStarted else { return }
         overlayEngine.beginRepositioning()
     }
 
     public func endOverlayRepositioning() {
-        guard activeMode == .translation else { return }
+        guard activeMode == .translation, sessionStarted else { return }
         overlayEngine.endRepositioning()
     }
 
     public func resetOverlayPosition() {
-        guard activeMode == .translation else { return }
+        guard activeMode == .translation, sessionStarted else { return }
         overlayEngine.resetPosition()
     }
 
@@ -555,7 +567,7 @@ public final class SessionOrchestrator: SessionRuntimeProtocol {
         handler(error)
         Task { @MainActor [weak self] in
             guard self?.sessionID == expectedSessionID else { return }
-            await self?.stop(reason: .failed)
+            await self?.stop(reason: .failed, notifyEnded: true)
         }
     }
 

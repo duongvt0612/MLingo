@@ -6,6 +6,7 @@ public struct SessionRuntimeHandlers: Sendable {
     public let onWhisperDiagnostics: @Sendable (WhisperDiagnostics) async -> Void
     public let onPerformanceDiagnostics:
         @Sendable (PipelinePerformanceDiagnostics) async -> Void
+    public let onEnded: @MainActor @Sendable (SessionEndReason) -> Void
 
     public init(
         onError: @escaping @MainActor @Sendable (MLingoError) -> Void,
@@ -15,7 +16,8 @@ public struct SessionRuntimeHandlers: Sendable {
         onWhisperDiagnostics: @escaping @Sendable (WhisperDiagnostics) async -> Void = { _ in },
         onPerformanceDiagnostics: @escaping @Sendable (
             PipelinePerformanceDiagnostics
-        ) async -> Void = { _ in }
+        ) async -> Void = { _ in },
+        onEnded: @escaping @MainActor @Sendable (SessionEndReason) -> Void = { _ in }
     ) {
         self.onError = onError
         self.onWarning = onWarning
@@ -23,6 +25,7 @@ public struct SessionRuntimeHandlers: Sendable {
         self.onTranscript = onTranscript
         self.onWhisperDiagnostics = onWhisperDiagnostics
         self.onPerformanceDiagnostics = onPerformanceDiagnostics
+        self.onEnded = onEnded
     }
 }
 

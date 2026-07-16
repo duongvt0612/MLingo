@@ -35,8 +35,11 @@ blast-radius evidence for this migration.
   regression confirms it never starts or stops the session runtime.
 - The original 17 deterministic runtime characterization cases were run against the old
   implementation before cutover and then migrated as permanent orchestrator contracts. The
-  focused final gates pass: 1 `SessionRuntimeContract`, 20 `SessionOrchestrator`, 3
-  `TranslationWorker`, and 2 `MLingoViewModelRuntime` tests.
+  focused final gates pass: 1 `SessionRuntimeContract`, 22 `SessionOrchestrator`, 3
+  `TranslationWorkerTests` cases (including active-item discard after cancelled success or
+  failure), and 3 `MLingoViewModelRuntime` tests. The broader `TranslationWorker` filter reports
+  4 because it also matches `stoppedTranslationWorkerIgnoresLateResponse` in the orchestrator
+  suite.
 - Lifecycle facts are session-scoped and ordered. `SessionStarted` is published only after
   Whisper and audio startup succeed; transcript and translation facts share the Whisper trace;
   cancelled stop publishes `SessionEnded(.cancelled)`; startup failure publishes no fake
@@ -51,7 +54,7 @@ blast-radius evidence for this migration.
 - The offline end-to-end fixture passes through fake audio, scripted Whisper,
   `ProviderTranslationEngine`, scripted OpenAI-compatible HTTP transport, typed events and fake
   overlay without network, paid provider, hardware or TCC access.
-- Final validation: 293/293 tests pass; SwiftPM Release passes with only the classified upstream
+- Final validation: 297/297 tests pass; SwiftPM Release passes with only the classified upstream
   MLXAudioVAD README resource warning; native arm64 Release archive and strict ad-hoc signature
   validation pass; `git diff --check` passes; repository cleanup search returns no
   `SubtitlePipeline` or `SubtitlePipelineMode` match under `Sources/` or `Tests/`.
