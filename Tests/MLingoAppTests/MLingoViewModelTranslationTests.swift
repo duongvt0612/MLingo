@@ -1019,6 +1019,45 @@ func viewModelExposesOverlayStateAndRoutesLiveOverlayActions() async throws {
 }
 
 @MainActor
+@Test func MLingoViewModelRuntimeRoutesTranscriptionThroughProtocol() async throws {
+    let runtime = AppSessionRuntimeSpy()
+    let viewModel = makeViewModel(
+        runtime: runtime,
+        translationTestEngineFactory: { _ in AppTestTranslationEngine() }
+    )
+
+    viewModel.startTranscriptionTest()
+    try await appEventually { runtime.startedKinds == [.transcription] }
+    #expect(viewModel.activeMode == .transcriptionTest)
+
+    viewModel.stopTranscriptionTest()
+    try await appEventually { runtime.stopReasons == [.cancelled] }
+    #expect(viewModel.activeMode == .idle)
+}
+
+@MainActor
+@Test func MLingoViewModelRuntimeKeepsSoundTestOutsideRuntime() async throws {
+    let runtime = AppSessionRuntimeSpy()
+    let audioFactory = AppTestAudioFactory()
+    let viewModel = makeViewModel(
+        audioFactory: audioFactory,
+        runtime: runtime,
+        translationTestEngineFactory: { _ in AppTestTranslationEngine() }
+    )
+
+    viewModel.startSoundTest()
+    try await appEventually {
+        viewModel.activeMode == .soundTest && audioFactory.makeCount == 1
+    }
+    #expect(audioFactory.makeCount == 1)
+    #expect(runtime.startedKinds.isEmpty)
+
+    viewModel.stopSoundTest()
+    try await appEventually { viewModel.activeMode == .idle }
+    #expect(runtime.stopReasons.isEmpty)
+}
+
+@MainActor
 private func makeViewModel(
     settingsStore: AppTestSettingsStore = AppTestSettingsStore(),
     keyStore: AppTestAPIKeyStore = AppTestAPIKeyStore(),
@@ -1029,9 +1068,10 @@ private func makeViewModel(
     credentialStore: (any ProviderCredentialStoreProtocol)? = nil,
     pipelineTranslationEngine: (any TranslationEngineProtocol)? = nil,
     whisperEngine: (any WhisperEngineProtocol)? = nil,
+    runtime: (any SessionRuntimeProtocol)? = nil,
     translationTestEngineFactory: @escaping MLingoViewModel.TranslationTestEngineFactory
 ) -> MLingoViewModel {
-    let pipeline = SubtitlePipeline(
+    let runtime = runtime ?? SessionOrchestrator(
         audioEngineFactory: audioFactory,
         whisperEngine: whisperEngine ?? AppTestWhisperEngine(),
         translationEngine: pipelineTranslationEngine ?? AppTestTranslationEngine(),
@@ -1042,13 +1082,36 @@ private func makeViewModel(
         settings: AppSettings(),
         settingsStore: settingsStore,
         apiKeyStore: keyStore,
-        pipeline: pipeline,
+        runtime: runtime,
         audioEngineFactory: audioFactory,
         providerMigration: providerMigration,
         profileStore: profileStore,
         credentialStore: credentialStore,
         translationTestEngineFactory: translationTestEngineFactory
     )
+}
+
+@MainActor
+private final class AppSessionRuntimeSpy: SessionRuntimeProtocol {
+    let overlayPresentationState = OverlayPresentationState()
+    private(set) var startedKinds: [SessionKind] = []
+    private(set) var stopReasons: [SessionEndReason] = []
+
+    func start(
+        kind: SessionKind,
+        translationSelection: ResolvedProviderSelection?,
+        handlers: SessionRuntimeHandlers
+    ) async -> Bool {
+        startedKinds.append(kind)
+        return true
+    }
+
+    func stop(reason: SessionEndReason) async { stopReasons.append(reason) }
+    func setOverlayVisible(_ isVisible: Bool) {}
+    func beginOverlayRepositioning() {}
+    func endOverlayRepositioning() {}
+    func resetOverlayPosition() {}
+    func selectOverlayDisplay(_ selection: OverlayDisplaySelection) {}
 }
 
 private actor AppTestProfileStore: ProviderProfileStoreProtocol {

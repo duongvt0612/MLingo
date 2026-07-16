@@ -26,7 +26,7 @@ final class MLingoViewModel {
 
     enum ActiveMode: Equatable {
         case idle
-        /// Profile resolve / credential preflight before the pipeline starts.
+        /// Profile resolve / credential preflight before the runtime starts.
         case preparingTranslation
         case soundTest
         case transcriptionTest
@@ -78,7 +78,7 @@ final class MLingoViewModel {
         AppCommandAvailability(activeMode: activeMode)
     }
     var overlayPresentationState: OverlayPresentationState {
-        pipeline.overlayPresentationState
+        runtime.overlayPresentationState
     }
 
     func credentialStatus(for candidateAPIKey: String) -> CredentialStatus {
@@ -99,7 +99,7 @@ final class MLingoViewModel {
 
     private let settingsStore: SettingsStoreProtocol
     private let apiKeyStore: APIKeyStoreProtocol
-    private let pipeline: SubtitlePipeline
+    private let runtime: any SessionRuntimeProtocol
     private let audioEngineFactory: any AudioEngineFactoryProtocol
     private let providerMigration: (any ProviderMigrationProtocol)?
     private let profileStore: (any ProviderProfileStoreProtocol)?
@@ -120,7 +120,7 @@ final class MLingoViewModel {
         settings: AppSettings,
         settingsStore: SettingsStoreProtocol,
         apiKeyStore: APIKeyStoreProtocol,
-        pipeline: SubtitlePipeline,
+        runtime: any SessionRuntimeProtocol,
         audioEngineFactory: any AudioEngineFactoryProtocol,
         providerMigration: (any ProviderMigrationProtocol)? = nil,
         profileStore: (any ProviderProfileStoreProtocol)? = nil,
@@ -130,7 +130,7 @@ final class MLingoViewModel {
         self.settings = settings
         self.settingsStore = settingsStore
         self.apiKeyStore = apiKeyStore
-        self.pipeline = pipeline
+        self.runtime = runtime
         self.audioEngineFactory = audioEngineFactory
         self.providerMigration = providerMigration
         self.profileStore = profileStore
@@ -161,7 +161,7 @@ final class MLingoViewModel {
             }
         )
         let audioEngineFactory = SystemAudioEngineFactory()
-        let pipeline = SubtitlePipeline(
+        let runtime = SessionOrchestrator(
             audioEngineFactory: audioEngineFactory,
             whisperEngine: MLXWhisperEngine(),
             translationEngine: translation,
@@ -173,7 +173,7 @@ final class MLingoViewModel {
             settings: AppSettings(),
             settingsStore: settingsStore,
             apiKeyStore: apiKeyStore,
-            pipeline: pipeline,
+            runtime: runtime,
             audioEngineFactory: audioEngineFactory,
             providerMigration: migration,
             profileStore: profileStore,
@@ -253,7 +253,7 @@ final class MLingoViewModel {
                 self?.activeTranslationCredentialID
             },
             applyOverlay: { [weak self] selection in
-                self?.pipeline.selectOverlayDisplay(selection)
+                self?.runtime.selectOverlayDisplay(selection)
             },
             onCommit: { [weak self] snapshot in
                 self?.applyCommittedSettings(snapshot)
@@ -346,7 +346,7 @@ final class MLingoViewModel {
         }
 
         if let overlayDisplaySelection {
-            pipeline.selectOverlayDisplay(overlayDisplaySelection)
+            runtime.selectOverlayDisplay(overlayDisplaySelection)
         }
         apiKey = trimmedAPIKey
         credentialState = trimmedAPIKey.isEmpty ? .notStored : .stored
@@ -427,7 +427,7 @@ final class MLingoViewModel {
                 status = "Settings need attention"
                 return
             }
-            startPipeline(mode: .translation)
+            startRuntime(kind: .translation)
             return
         }
 
@@ -479,10 +479,10 @@ final class MLingoViewModel {
                 }
 
                 self.startTask = nil
-                // Promote preparing → pipeline start with a fresh session.
+                // Promote preparing → runtime start with a fresh session.
                 self.activeMode = .idle
-                self.startPipeline(
-                    mode: .translation,
+                self.startRuntime(
+                    kind: .translation,
                     translationSelection: selection,
                     settingsArePersisted: true
                 )
@@ -661,30 +661,30 @@ final class MLingoViewModel {
 
     func setOverlayVisible(_ isVisible: Bool) {
         guard isRunning else { return }
-        pipeline.setOverlayVisible(isVisible)
+        runtime.setOverlayVisible(isVisible)
     }
 
     func beginOverlayRepositioning() {
         guard isRunning else { return }
-        pipeline.beginOverlayRepositioning()
+        runtime.beginOverlayRepositioning()
     }
 
     func endOverlayRepositioning() {
         guard isRunning else { return }
-        pipeline.endOverlayRepositioning()
+        runtime.endOverlayRepositioning()
     }
 
     func resetOverlayPosition() {
         guard isRunning else { return }
-        pipeline.resetOverlayPosition()
+        runtime.resetOverlayPosition()
     }
 
     func selectOverlayDisplay(_ selection: OverlayDisplaySelection) {
-        pipeline.selectOverlayDisplay(selection)
+        runtime.selectOverlayDisplay(selection)
     }
 
     func startTranscriptionTest() {
-        startPipeline(mode: .transcriptionOnly)
+        startRuntime(kind: .transcription)
     }
 
     func stopTranscriptionTest() {
@@ -740,16 +740,16 @@ final class MLingoViewModel {
         stopActiveMode(statusAfterStop: "Sound test stopped")
     }
 
-    private func startPipeline(
-        mode: SubtitlePipelineMode,
+    private func startRuntime(
+        kind: SessionKind,
         translationSelection: ResolvedProviderSelection? = nil,
         settingsArePersisted: Bool = false
     ) {
         guard activeMode == .idle, startTask == nil else { return }
 
-        let viewMode: ActiveMode = mode == .translation ? .translation : .transcriptionTest
+        let viewMode: ActiveMode = kind == .translation ? .translation : .transcriptionTest
         let sessionID = UUID()
-        let startingStatus = mode == .translation ? "Starting translation" : "Starting transcription test"
+        let startingStatus = kind == .translation ? "Starting translation" : "Starting transcription test"
         activeSessionID = sessionID
         activeMode = viewMode
         status = settingsArePersisted ? startingStatus : "Saving settings"
@@ -775,54 +775,56 @@ final class MLingoViewModel {
             guard isCurrentSession(sessionID, mode: viewMode) else { return }
             status = startingStatus
 
-            let started = await pipeline.start(
-                mode: mode,
+            let started = await runtime.start(
+                kind: kind,
                 translationSelection: translationSelection,
-                onError: { [weak self, sessionID] error in
-                    guard self?.activeSessionID == sessionID else { return }
-                    self?.present(error)
-                    self?.status = "Needs attention"
-                },
-                onWarning: { [weak self, sessionID] message in
-                    Task { @MainActor in
+                handlers: SessionRuntimeHandlers(
+                    onError: { [weak self, sessionID] error in
                         guard self?.activeSessionID == sessionID else { return }
-                        self?.lastWarning = message
-                    }
-                },
-                onAudioDiagnostics: { [weak self, sessionID] diagnostics in
-                    await MainActor.run {
-                        guard self?.activeSessionID == sessionID else { return }
-                        self?.audioDiagnostics = diagnostics
-                    }
-                },
-                onTranscript: { [weak self, sessionID] transcript in
-                    await MainActor.run {
-                        guard self?.activeSessionID == sessionID else { return }
-                        self?.appendTranscript(transcript)
-                    }
-                },
-                onWhisperDiagnostics: { [weak self, sessionID] diagnostics in
-                    await MainActor.run {
-                        guard self?.activeSessionID == sessionID else { return }
-                        self?.whisperDiagnostics = diagnostics
-                        if diagnostics.modelState == .loading {
-                            self?.status = "Loading Whisper model"
+                        self?.present(error)
+                        self?.status = "Needs attention"
+                    },
+                    onWarning: { [weak self, sessionID] message in
+                        Task { @MainActor in
+                            guard self?.activeSessionID == sessionID else { return }
+                            self?.lastWarning = message
+                        }
+                    },
+                    onAudioDiagnostics: { [weak self, sessionID] diagnostics in
+                        await MainActor.run {
+                            guard self?.activeSessionID == sessionID else { return }
+                            self?.audioDiagnostics = diagnostics
+                        }
+                    },
+                    onTranscript: { [weak self, sessionID] transcript in
+                        await MainActor.run {
+                            guard self?.activeSessionID == sessionID else { return }
+                            self?.appendTranscript(transcript)
+                        }
+                    },
+                    onWhisperDiagnostics: { [weak self, sessionID] diagnostics in
+                        await MainActor.run {
+                            guard self?.activeSessionID == sessionID else { return }
+                            self?.whisperDiagnostics = diagnostics
+                            if diagnostics.modelState == .loading {
+                                self?.status = "Loading Whisper model"
+                            }
+                        }
+                    },
+                    onPerformanceDiagnostics: { [weak self, sessionID] diagnostics in
+                        await MainActor.run {
+                            guard self?.activeSessionID == sessionID else { return }
+                            self?.performanceDiagnostics = diagnostics
                         }
                     }
-                },
-                onPerformanceDiagnostics: { [weak self, sessionID] diagnostics in
-                    await MainActor.run {
-                        guard self?.activeSessionID == sessionID else { return }
-                        self?.performanceDiagnostics = diagnostics
-                    }
-                }
+                )
             )
             guard isCurrentSession(sessionID, mode: viewMode) else { return }
             guard started else {
                 await finishActiveMode(statusAfterStop: "Needs attention")
                 return
             }
-            status = mode == .translation ? "Listening" : "Testing transcription"
+            status = kind == .translation ? "Listening" : "Testing transcription"
         }
     }
 
@@ -845,7 +847,7 @@ final class MLingoViewModel {
             soundDiagnosticsTask = nil
             soundTestEngine = nil
         } else if mode == .translation || mode == .transcriptionTest {
-            await pipeline.stop()
+            await runtime.stop(reason: .cancelled)
         }
 
         guard activeSessionID == finishingSessionID else { return }

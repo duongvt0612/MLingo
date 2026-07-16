@@ -2,14 +2,14 @@
 
 **Design:** [Platform design](../../specs/2026-07-15-mlingo-platform-design.md)
 
-**Status:** Milestones 01-02 and 05 complete; Milestone 03 implementation complete with its
+**Status:** Milestones 01-02 and 05-06 complete; Milestone 03 implementation complete with its
 loopback live proof deferred by owner waiver; Milestone 04 code-complete with manual
-accessibility acceptance pending.
+accessibility acceptance pending; Milestone 06 started.
 **Execution rule:** Complete and verify one milestone before starting the next. The owner
 has explicitly waived the external loopback proof for Milestone 03 until Ollama or LM
-Studio is installed. The owner has also explicitly allowed Milestone 05 to start while
-Milestone 04's manual accessibility acceptance remains pending. Neither waived gate is
-treated as passed.
+Studio is installed. The owner has also explicitly allowed Milestones 05 and 06 to start
+while Milestone 04's manual accessibility acceptance remains pending. Neither waived gate
+is treated as passed.
 
 ## Locked decisions
 
@@ -68,3 +68,5 @@ Run a native Xcode Release build whenever a dependency, resource, entitlement, s
 - 2026-07-16: Milestone 04 implementation is code-complete. Native eight-destination Settings, transactional provider/profile/Keychain persistence, draft connection probing, independent capability assignments, provider-based runtime readiness, deterministic validation/focus routing, and rollback recovery are implemented. Audit found four M04 files missing from the Xcode application target even though SwiftPM passed; project membership is fixed and guarded by a source-membership regression. The offline suite now passes 268 tests; SwiftPM Release build, native Release archive/signature validation, and diff checks pass. Native accessibility-tree and partial appearance/transaction evidence is recorded in the milestone file, but full VoiceOver, keyboard-only, largest-text, reduced-motion, Dark reopen, and fake-credential smoke acceptance remains unchecked, so Milestone 04 is not yet marked complete.
 - 2026-07-16: By explicit owner waiver, Milestone 05 started while Milestone 04 remains code-complete/manual-pending; the remaining M04 manual checks stay unchecked. M05 is scoped to a standalone actor-managed typed event hub in `MLingoCore`, with no runtime migration, UI, persistence, dependency, or `SubtitlePipeline` change.
 - 2026-07-16: Milestone 05 complete. Immutable typed envelopes and four initial facts, per-session sequence and trace metadata, exact type/session routing, bounded realtime drop-oldest/coalescing, lossless durable backpressure, typed metrics, handler-failure isolation, idempotent cancellation, and shutdown race handling are implemented in standalone `MLingoCore`. Focused tests pass (2 EventEnvelope, 14 TypedEventHub, 1 EventFacts); the full suite passes 285 tests, Release build passes with the classified upstream MLXAudioVAD README warning, and whitespace plus unchanged-`SubtitlePipeline.swift` gates pass. M04's manual acceptance remains pending under the recorded owner waiver.
+- 2026-07-16: By explicit owner waiver, Milestone 06 started while Milestone 04 remains code-complete/manual-pending; no M04 manual item is represented as passed. The clean starting point is M05 merge-equivalent commit `e0b6a37`; the audited baseline remains 285 tests with passing Release and whitespace gates. GitNexus reports `UNKNOWN` impact because its parser skips Swift, so M06 uses direct source-reference auditing and parity contracts for the high-risk runtime cutover.
+- 2026-07-16: Milestone 06 complete. `MLingoViewModel` now depends on `SessionRuntimeProtocol` and live composition uses the event-driven `SessionOrchestrator`. Session-scoped lifecycle/transcript/translation facts preserve ordering and Whisper trace metadata; raw audio and diagnostics remain direct; actor-owned translation retains context-two, dedupe, bounded drop-oldest, permanent-error pause and stale-result rejection; Sound Test remains isolated. The old runtime types and obsolete tests are removed. Focused runtime gates and the offline scripted-provider end-to-end fixture pass; the full suite passes 293 tests; SwiftPM Release, native arm64 archive/signature, whitespace and legacy-symbol cleanup gates pass. GitNexus was refreshed but still skips Swift (120 files), so direct diff/reference auditing remains the authoritative blast-radius evidence. M04 manual accessibility acceptance remains pending under the owner waiver.

@@ -134,24 +134,24 @@ struct PerformanceBenchmarkTests {
         )
         let audio = PerformanceLoopAudioEngine(chunk: chunk)
         let recorder = PerformanceDiagnosticsRecorder()
-        let pipeline = SubtitlePipeline(
+        let runtime = SessionOrchestrator(
             audioEngineFactory: PerformanceAudioEngineFactory(engine: audio),
             whisperEngine: MLXWhisperEngine(),
             translationEngine: PerformanceTranslationEngine(),
             overlayEngine: PerformanceOverlayEngine(),
             settingsStore: PerformanceSettingsStore()
         )
-        let started = await pipeline.start(
-            mode: .transcriptionOnly,
-            onError: { error in print("Stability pipeline error: \(error.localizedDescription)") },
+        let started = await runtime.start(
+            kind: .transcription,
+            onError: { error in print("Stability runtime error: \(error.localizedDescription)") },
             onPerformanceDiagnostics: { await recorder.append($0) }
         )
         guard started else {
-            print("Skipping stability benchmark because the MLX pipeline could not start")
+            print("Skipping stability benchmark because the MLX runtime could not start")
             return
         }
         try await Task.sleep(for: .seconds(duration))
-        await pipeline.stop()
+        await runtime.stop(reason: .cancelled)
 
         let recordedDiagnostics = await recorder.values.filter {
             $0.residentMemoryBytes != nil && $0.sessionDuration > 0

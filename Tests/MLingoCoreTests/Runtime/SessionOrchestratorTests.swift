@@ -11,7 +11,7 @@ func transcriptionOnlyEmitsTranscriptWithoutTranslationOrOverlay() async throws 
     let settings = PipelineSettingsStore()
     let transcriptRecorder = PipelineTranscriptRecorder()
     let diagnosticsRecorder = PipelineDiagnosticsRecorder()
-    let pipeline = SubtitlePipeline(
+    let runtime = SessionOrchestrator(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: whisper,
         translationEngine: translation,
@@ -19,8 +19,8 @@ func transcriptionOnlyEmitsTranscriptWithoutTranslationOrOverlay() async throws 
         settingsStore: settings
     )
 
-    await pipeline.start(
-        mode: .transcriptionOnly,
+    await runtime.start(
+        kind: .transcription,
         onError: { _ in },
         onTranscript: { transcript in
             await transcriptRecorder.append(transcript)
@@ -29,9 +29,9 @@ func transcriptionOnlyEmitsTranscriptWithoutTranslationOrOverlay() async throws 
             await diagnosticsRecorder.append(diagnostics)
         }
     )
-    audio.yield(pipelineAudioChunk(timestamp: 5))
+    audio.yield(orchestratorAudioChunk(timestamp: 5))
 
-    try await pipelineEventually {
+    try await orchestratorEventually {
         let transcriptCount = await transcriptRecorder.count
         let diagnosticsCount = await diagnosticsRecorder.count
         return transcriptCount == 1 && diagnosticsCount > 0
@@ -41,14 +41,14 @@ func transcriptionOnlyEmitsTranscriptWithoutTranslationOrOverlay() async throws 
     #expect(overlay.showCount == 0)
     #expect(overlay.updateCount == 0)
     #expect(await diagnosticsRecorder.latest.modelState == .ready)
-    await pipeline.stop()
+    await runtime.stop()
 }
 
 @Test @MainActor
-func pipelineUsesCaptureBackendFromSettings() async {
+func orchestratorUsesCaptureBackendFromSettings() async {
     let audio = PipelineAudioEngine()
     let factory = PipelineAudioEngineFactory(engines: [audio])
-    let pipeline = SubtitlePipeline(
+    let runtime = SessionOrchestrator(
         audioEngineFactory: factory,
         whisperEngine: PipelineWhisperEngine(text: "unused"),
         translationEngine: PipelineTranslationEngine(),
@@ -58,17 +58,17 @@ func pipelineUsesCaptureBackendFromSettings() async {
         )
     )
 
-    await pipeline.start(mode: .transcriptionOnly, onError: { _ in })
+    await runtime.start(kind: .transcription, onError: { _ in })
 
     #expect(factory.requestedBackends == [.screenCaptureKit])
-    await pipeline.stop()
+    await runtime.stop()
 }
 
 @Test @MainActor
-func pipelineReportsAudioStartupFailure() async {
+func orchestratorReportsAudioStartupFailure() async {
     let audio = PipelineAudioEngine(startError: MLingoError.noAudioSource)
     let errors = PipelineErrorRecorder()
-    let pipeline = SubtitlePipeline(
+    let runtime = SessionOrchestrator(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: PipelineWhisperEngine(text: "unused"),
         translationEngine: PipelineTranslationEngine(),
@@ -76,8 +76,8 @@ func pipelineReportsAudioStartupFailure() async {
         settingsStore: PipelineSettingsStore()
     )
 
-    let started = await pipeline.start(
-        mode: .transcriptionOnly,
+    let started = await runtime.start(
+        kind: .transcription,
         onError: { errors.append($0) }
     )
 
@@ -86,9 +86,9 @@ func pipelineReportsAudioStartupFailure() async {
 }
 
 @Test @MainActor
-func pipelineErrorHandlerRunsOnMainActor() {
+func orchestratorErrorHandlerRunsOnMainActor() {
     let errors = PipelineMainActorErrorRecorder()
-    let handler: SubtitlePipeline.ErrorHandler = { error in
+    let handler: SessionOrchestrator.ErrorHandler = { error in
         errors.append(error)
     }
 
@@ -104,7 +104,7 @@ func translationModePreservesTranslationAndOverlayFlow() async throws {
     let translation = PipelineTranslationEngine()
     let overlay = PipelineOverlayEngine()
     let settings = PipelineSettingsStore()
-    let pipeline = SubtitlePipeline(
+    let runtime = SessionOrchestrator(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: whisper,
         translationEngine: translation,
@@ -112,20 +112,20 @@ func translationModePreservesTranslationAndOverlayFlow() async throws {
         settingsStore: settings
     )
 
-    await pipeline.start(
-        mode: .translation,
+    await runtime.start(
+        kind: .translation,
         onError: { _ in }
     )
-    audio.yield(pipelineAudioChunk(timestamp: 8))
+    audio.yield(orchestratorAudioChunk(timestamp: 8))
 
-    try await pipelineEventually {
+    try await orchestratorEventually {
         await overlay.updateCount == 1
     }
 
     #expect(await translation.callCount == 1)
     #expect(overlay.showCount == 1)
     #expect(overlay.lastSubtitle?.original == "Translate this")
-    await pipeline.stop()
+    await runtime.stop()
     #expect(overlay.hideCount == 1)
 }
 
@@ -134,7 +134,7 @@ func performanceDiagnosticsCompleteAndRemainAvailableAfterTranslationStops() asy
     let audio = PipelineAudioEngine()
     let overlay = PipelineOverlayEngine()
     let recorder = PipelinePerformanceRecorder()
-    let pipeline = SubtitlePipeline(
+    let runtime = SessionOrchestrator(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: PipelineWhisperEngine(text: "Measured transcript"),
         translationEngine: PipelineTranslationEngine(),
@@ -142,16 +142,16 @@ func performanceDiagnosticsCompleteAndRemainAvailableAfterTranslationStops() asy
         settingsStore: PipelineSettingsStore()
     )
 
-    await pipeline.start(
-        mode: .translation,
+    await runtime.start(
+        kind: .translation,
         onError: { _ in },
         onPerformanceDiagnostics: { diagnostics in
             await recorder.append(diagnostics)
         }
     )
-    audio.yield(pipelineAudioChunk(timestamp: 4))
+    audio.yield(orchestratorAudioChunk(timestamp: 4))
 
-    try await pipelineEventually(timeout: .seconds(2)) {
+    try await orchestratorEventually(timeout: .seconds(2)) {
         await recorder.latest.totalLatency.sampleCount == 1
     }
     let completed = await recorder.latest
@@ -161,7 +161,7 @@ func performanceDiagnosticsCompleteAndRemainAvailableAfterTranslationStops() asy
     #expect(completed.totalLatency.latest != nil)
     #expect(completed.residentMemoryBytes != nil)
 
-    await pipeline.stop()
+    await runtime.stop()
     let stopped = await recorder.latest
     #expect(stopped.totalLatency == completed.totalLatency)
     #expect(stopped.whisperDecodeLatency == completed.whisperDecodeLatency)
@@ -171,14 +171,14 @@ func performanceDiagnosticsCompleteAndRemainAvailableAfterTranslationStops() asy
 }
 
 @Test @MainActor
-func pipelineProxiesOverlayCommandsOnlyDuringTranslationSession() async {
+func orchestratorProxiesOverlayCommandsOnlyDuringTranslationSession() async {
     let audio = PipelineAudioEngine()
     let overlay = PipelineOverlayEngine()
     let settings = AppSettings(
         subtitleFontSize: 32,
         subtitleBackgroundOpacity: 0.72
     )
-    let pipeline = SubtitlePipeline(
+    let runtime = SessionOrchestrator(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: PipelineWhisperEngine(text: "unused"),
         translationEngine: PipelineTranslationEngine(),
@@ -186,27 +186,27 @@ func pipelineProxiesOverlayCommandsOnlyDuringTranslationSession() async {
         settingsStore: PipelineSettingsStore(settings: settings)
     )
 
-    pipeline.setOverlayVisible(false)
-    pipeline.beginOverlayRepositioning()
-    pipeline.endOverlayRepositioning()
-    pipeline.resetOverlayPosition()
-    pipeline.selectOverlayDisplay(.display(id: "external"))
+    runtime.setOverlayVisible(false)
+    runtime.beginOverlayRepositioning()
+    runtime.endOverlayRepositioning()
+    runtime.resetOverlayPosition()
+    runtime.selectOverlayDisplay(.display(id: "external"))
 
     #expect(overlay.commandCount == 1)
 
-    let started = await pipeline.start(mode: .translation, onError: { _ in })
+    let started = await runtime.start(kind: .translation, onError: { _ in })
     #expect(started)
     #expect(overlay.lastShownSettings == settings)
 
-    pipeline.setOverlayVisible(false)
-    pipeline.beginOverlayRepositioning()
-    pipeline.endOverlayRepositioning()
-    pipeline.resetOverlayPosition()
-    pipeline.selectOverlayDisplay(.display(id: "external"))
+    runtime.setOverlayVisible(false)
+    runtime.beginOverlayRepositioning()
+    runtime.endOverlayRepositioning()
+    runtime.resetOverlayPosition()
+    runtime.selectOverlayDisplay(.display(id: "external"))
 
     #expect(overlay.commandCount == 6)
 
-    await pipeline.stop()
+    await runtime.stop()
     #expect(overlay.hideCount == 1)
 }
 
@@ -218,7 +218,7 @@ func translationModeReceivesOnlyTextAfterFuzzyOverlap() async throws {
         "a really reliable transcript before translation starts",
     ])
     let translation = PipelineTranslationEngine()
-    let pipeline = SubtitlePipeline(
+    let runtime = SessionOrchestrator(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: whisper,
         translationEngine: translation,
@@ -226,17 +226,17 @@ func translationModeReceivesOnlyTextAfterFuzzyOverlap() async throws {
         settingsStore: PipelineSettingsStore()
     )
 
-    await pipeline.start(mode: .translation, onError: { _ in })
-    audio.yield(pipelineAudioChunk(timestamp: 0))
-    try await pipelineEventually { await translation.callCount == 1 }
-    audio.yield(pipelineAudioChunk(timestamp: 3))
-    try await pipelineEventually { await translation.callCount == 2 }
+    await runtime.start(kind: .translation, onError: { _ in })
+    audio.yield(orchestratorAudioChunk(timestamp: 0))
+    try await orchestratorEventually { await translation.callCount == 1 }
+    audio.yield(orchestratorAudioChunk(timestamp: 3))
+    try await orchestratorEventually { await translation.callCount == 2 }
 
     #expect(await translation.originalTexts == [
         "We need a very reliable transcript",
         "before translation starts",
     ])
-    await pipeline.stop()
+    await runtime.stop()
 }
 
 @Test @MainActor
@@ -246,7 +246,7 @@ func translationWorkerDoesNotBlockFollowingTranscripts() async throws {
     let translation = BlockingPipelineTranslationEngine()
     let overlay = PipelineOverlayEngine()
     let transcripts = PipelineTranscriptRecorder()
-    let pipeline = SubtitlePipeline(
+    let runtime = SessionOrchestrator(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: whisper,
         translationEngine: translation,
@@ -254,29 +254,29 @@ func translationWorkerDoesNotBlockFollowingTranscripts() async throws {
         settingsStore: PipelineSettingsStore()
     )
 
-    await pipeline.start(
-        mode: .translation,
+    await runtime.start(
+        kind: .translation,
         onError: { _ in },
         onTranscript: { transcript in await transcripts.append(transcript) }
     )
-    audio.yield(pipelineAudioChunk(timestamp: 0))
-    try await pipelineEventually { await translation.callCount == 1 }
+    audio.yield(orchestratorAudioChunk(timestamp: 0))
+    try await orchestratorEventually { await translation.callCount == 1 }
 
-    audio.yield(pipelineAudioChunk(timestamp: 3))
-    try await pipelineEventually { await transcripts.count == 2 }
+    audio.yield(orchestratorAudioChunk(timestamp: 3))
+    try await orchestratorEventually { await transcripts.count == 2 }
     #expect(await translation.callCount == 1)
 
     await translation.releaseFirst()
-    try await pipelineEventually { await overlay.updateCount == 2 }
+    try await orchestratorEventually { await overlay.updateCount == 2 }
     #expect(await translation.originalTexts == ["First line", "Second line"])
-    await pipeline.stop()
+    await runtime.stop()
 }
 
 @Test @MainActor
 func translationWorkerCapturesTwoPreviousTranscriptsAsContext() async throws {
     let audio = PipelineAudioEngine()
     let translation = PipelineTranslationEngine()
-    let pipeline = SubtitlePipeline(
+    let runtime = SessionOrchestrator(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: PipelineScriptedWhisperEngine(texts: ["One", "Two", "Three", "Four"]),
         translationEngine: translation,
@@ -284,10 +284,10 @@ func translationWorkerCapturesTwoPreviousTranscriptsAsContext() async throws {
         settingsStore: PipelineSettingsStore()
     )
 
-    await pipeline.start(mode: .translation, onError: { _ in })
+    await runtime.start(kind: .translation, onError: { _ in })
     for index in 0..<4 {
-        audio.yield(pipelineAudioChunk(timestamp: TimeInterval(index * 3)))
-        try await pipelineEventually { await translation.callCount == index + 1 }
+        audio.yield(orchestratorAudioChunk(timestamp: TimeInterval(index * 3)))
+        try await orchestratorEventually { await translation.callCount == index + 1 }
     }
 
     #expect(await translation.contextTexts == [
@@ -296,14 +296,14 @@ func translationWorkerCapturesTwoPreviousTranscriptsAsContext() async throws {
         ["One", "Two"],
         ["Two", "Three"],
     ])
-    await pipeline.stop()
+    await runtime.stop()
 }
 
 @Test @MainActor
 func translationWorkerSuppressesOnlyAdjacentDuplicateCandidates() async throws {
     let audio = PipelineAudioEngine()
     let translation = PipelineTranslationEngine()
-    let pipeline = SubtitlePipeline(
+    let runtime = SessionOrchestrator(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: PipelineScriptedWhisperEngine(texts: [
             "Repeated subtitle",
@@ -315,10 +315,10 @@ func translationWorkerSuppressesOnlyAdjacentDuplicateCandidates() async throws {
         settingsStore: PipelineSettingsStore()
     )
 
-    await pipeline.start(mode: .translation, onError: { _ in })
+    await runtime.start(kind: .translation, onError: { _ in })
     for index in 0..<3 {
-        audio.yield(pipelineAudioChunk(timestamp: TimeInterval(index * 3)))
-        try await pipelineEventually { await translation.callCount == index + 1 }
+        audio.yield(orchestratorAudioChunk(timestamp: TimeInterval(index * 3)))
+        try await orchestratorEventually { await translation.callCount == index + 1 }
     }
 
     #expect(await translation.originalTexts == [
@@ -326,7 +326,7 @@ func translationWorkerSuppressesOnlyAdjacentDuplicateCandidates() async throws {
         "Different subtitle",
         "Repeated subtitle",
     ])
-    await pipeline.stop()
+    await runtime.stop()
 }
 
 @Test @MainActor
@@ -334,7 +334,7 @@ func performanceDiagnosticsCountAdjacentTranslationDuplicates() async throws {
     let audio = PipelineAudioEngine()
     let translation = PipelineTranslationEngine()
     let recorder = PipelinePerformanceRecorder()
-    let pipeline = SubtitlePipeline(
+    let runtime = SessionOrchestrator(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: PipelineScriptedWhisperEngine(texts: ["Same line", "Same line"]),
         translationEngine: translation,
@@ -342,21 +342,21 @@ func performanceDiagnosticsCountAdjacentTranslationDuplicates() async throws {
         settingsStore: PipelineSettingsStore()
     )
 
-    await pipeline.start(
-        mode: .translation,
+    await runtime.start(
+        kind: .translation,
         onError: { _ in },
         onPerformanceDiagnostics: { await recorder.append($0) }
     )
-    audio.yield(pipelineAudioChunk(timestamp: 0))
-    try await pipelineEventually { await translation.callCount == 1 }
-    audio.yield(pipelineAudioChunk(timestamp: 6))
+    audio.yield(orchestratorAudioChunk(timestamp: 0))
+    try await orchestratorEventually { await translation.callCount == 1 }
+    audio.yield(orchestratorAudioChunk(timestamp: 6))
 
-    try await pipelineEventually(timeout: .seconds(2)) {
+    try await orchestratorEventually(timeout: .seconds(2)) {
         await recorder.latest.duplicateTranslationCount == 1
     }
     #expect(await translation.callCount == 1)
     #expect(await recorder.latest.totalLatency.sampleCount == 1)
-    await pipeline.stop()
+    await runtime.stop()
 }
 
 @Test @MainActor
@@ -371,7 +371,7 @@ func translationWorkerDropsOldestPendingRequestsWhenQueueIsFull() async throws {
     let warnings = PipelineMessageRecorder()
     let transcripts = PipelineTranscriptRecorder()
     let performance = PipelinePerformanceRecorder()
-    let pipeline = SubtitlePipeline(
+    let runtime = SessionOrchestrator(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: PipelineScriptedWhisperEngine(texts: texts),
         translationEngine: translation,
@@ -379,16 +379,16 @@ func translationWorkerDropsOldestPendingRequestsWhenQueueIsFull() async throws {
         settingsStore: PipelineSettingsStore()
     )
 
-    await pipeline.start(
-        mode: .translation,
+    await runtime.start(
+        kind: .translation,
         onError: { _ in },
         onWarning: { message in warnings.append(message) },
         onTranscript: { transcript in await transcripts.append(transcript) },
         onPerformanceDiagnostics: { await performance.append($0) }
     )
     for index in texts.indices {
-        audio.yield(pipelineAudioChunk(timestamp: TimeInterval(index * 3)))
-        try await pipelineEventually(timeout: .seconds(3)) {
+        audio.yield(orchestratorAudioChunk(timestamp: TimeInterval(index * 3)))
+        try await orchestratorEventually(timeout: .seconds(3)) {
             await transcripts.count >= index + 1
         }
     }
@@ -396,12 +396,12 @@ func translationWorkerDropsOldestPendingRequestsWhenQueueIsFull() async throws {
     #expect(await translation.callCount == 1)
     #expect(warnings.latest?.contains("Skipped 2") == true)
     await translation.releaseFirst()
-    try await pipelineEventually { await translation.callCount == 9 }
+    try await orchestratorEventually { await translation.callCount == 9 }
     #expect(await translation.originalTexts == ["Alpha orchard"] + Array(texts[3...]))
-    try await pipelineEventually(timeout: .seconds(2)) {
+    try await orchestratorEventually(timeout: .seconds(2)) {
         await performance.latest.skippedTranslationCount == 2
     }
-    await pipeline.stop()
+    await runtime.stop()
 }
 
 @Test @MainActor
@@ -410,7 +410,7 @@ func permanentTranslationFailurePausesOnlyTranslationBranch() async throws {
     let translation = FailingPipelineTranslationEngine(error: MLingoError.invalidAPIKey)
     let errors = PipelineErrorRecorder()
     let transcripts = PipelineTranscriptRecorder()
-    let pipeline = SubtitlePipeline(
+    let runtime = SessionOrchestrator(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: PipelineScriptedWhisperEngine(texts: ["First", "Second"]),
         translationEngine: translation,
@@ -418,19 +418,19 @@ func permanentTranslationFailurePausesOnlyTranslationBranch() async throws {
         settingsStore: PipelineSettingsStore()
     )
 
-    await pipeline.start(
-        mode: .translation,
+    await runtime.start(
+        kind: .translation,
         onError: { message in errors.append(message) },
         onTranscript: { transcript in await transcripts.append(transcript) }
     )
-    audio.yield(pipelineAudioChunk(timestamp: 0))
-    try await pipelineEventually { errors.count == 1 }
-    audio.yield(pipelineAudioChunk(timestamp: 3))
-    try await pipelineEventually { await transcripts.count == 2 }
+    audio.yield(orchestratorAudioChunk(timestamp: 0))
+    try await orchestratorEventually { errors.count == 1 }
+    audio.yield(orchestratorAudioChunk(timestamp: 3))
+    try await orchestratorEventually { await transcripts.count == 2 }
 
     #expect(await translation.callCount == 1)
     #expect(audio.stopCount == 0)
-    await pipeline.stop()
+    await runtime.stop()
 }
 
 @Test @MainActor
@@ -438,7 +438,7 @@ func stoppedTranslationWorkerIgnoresLateResponse() async throws {
     let audio = PipelineAudioEngine()
     let translation = BlockingPipelineTranslationEngine()
     let overlay = PipelineOverlayEngine()
-    let pipeline = SubtitlePipeline(
+    let runtime = SessionOrchestrator(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: PipelineWhisperEngine(text: "Late line"),
         translationEngine: translation,
@@ -446,10 +446,10 @@ func stoppedTranslationWorkerIgnoresLateResponse() async throws {
         settingsStore: PipelineSettingsStore()
     )
 
-    await pipeline.start(mode: .translation, onError: { _ in })
-    audio.yield(pipelineAudioChunk(timestamp: 0))
-    try await pipelineEventually { await translation.callCount == 1 }
-    await pipeline.stop()
+    await runtime.start(kind: .translation, onError: { _ in })
+    audio.yield(orchestratorAudioChunk(timestamp: 0))
+    try await orchestratorEventually { await translation.callCount == 1 }
+    await runtime.stop()
     await translation.releaseFirst()
     try await Task.sleep(for: .milliseconds(30))
 
@@ -460,7 +460,7 @@ func stoppedTranslationWorkerIgnoresLateResponse() async throws {
 func audioDiagnosticsSkipStaleSnapshotsWhenUIIsBusy() async throws {
     let audio = PipelineAudioEngine()
     let recorder = SlowAudioDiagnosticsRecorder()
-    let pipeline = SubtitlePipeline(
+    let runtime = SessionOrchestrator(
         audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
         whisperEngine: PipelineWhisperEngine(text: "unused"),
         translationEngine: PipelineTranslationEngine(),
@@ -468,8 +468,8 @@ func audioDiagnosticsSkipStaleSnapshotsWhenUIIsBusy() async throws {
         settingsStore: PipelineSettingsStore()
     )
 
-    await pipeline.start(
-        mode: .transcriptionOnly,
+    await runtime.start(
+        kind: .transcription,
         onError: { _ in },
         onAudioDiagnostics: { diagnostics in
             await recorder.append(diagnostics)
@@ -477,7 +477,7 @@ func audioDiagnosticsSkipStaleSnapshotsWhenUIIsBusy() async throws {
     )
 
     audio.yieldDiagnostics(capturedChunkCount: 1)
-    try await pipelineEventually {
+    try await orchestratorEventually {
         await recorder.isHandlingFirstSnapshot
     }
 
@@ -485,11 +485,11 @@ func audioDiagnosticsSkipStaleSnapshotsWhenUIIsBusy() async throws {
     audio.yieldDiagnostics(capturedChunkCount: 3)
     await recorder.releaseFirstSnapshot()
 
-    try await pipelineEventually {
+    try await orchestratorEventually {
         await recorder.capturedChunkCounts.count == 2
     }
     #expect(await recorder.capturedChunkCounts == [1, 3])
-    await pipeline.stop()
+    await runtime.stop()
 }
 
 @Test @MainActor
@@ -499,7 +499,7 @@ func restartUsesFreshAudioEngineAndIgnoresPreviousSessionCallbacks() async throw
     let factory = PipelineAudioEngineFactory(engines: [firstAudio, secondAudio])
     let transcripts = PipelineTranscriptRecorder()
     let diagnostics = PipelineAudioDiagnosticsRecorder()
-    let pipeline = SubtitlePipeline(
+    let runtime = SessionOrchestrator(
         audioEngineFactory: factory,
         whisperEngine: PipelineWhisperEngine(text: "Restart transcript"),
         translationEngine: PipelineTranslationEngine(),
@@ -507,32 +507,32 @@ func restartUsesFreshAudioEngineAndIgnoresPreviousSessionCallbacks() async throw
         settingsStore: PipelineSettingsStore()
     )
 
-    await pipeline.start(
-        mode: .transcriptionOnly,
+    await runtime.start(
+        kind: .transcription,
         onError: { _ in },
         onAudioDiagnostics: { value in await diagnostics.append(value) },
         onTranscript: { value in await transcripts.append(value) }
     )
-    firstAudio.yield(pipelineAudioChunk(timestamp: 1))
-    try await pipelineEventually { await transcripts.count == 1 }
-    await pipeline.stop()
+    firstAudio.yield(orchestratorAudioChunk(timestamp: 1))
+    try await orchestratorEventually { await transcripts.count == 1 }
+    await runtime.stop()
 
-    await pipeline.start(
-        mode: .transcriptionOnly,
+    await runtime.start(
+        kind: .transcription,
         onError: { _ in },
         onAudioDiagnostics: { value in await diagnostics.append(value) },
         onTranscript: { value in await transcripts.append(value) }
     )
     secondAudio.yieldDiagnostics(capturedChunkCount: 2)
-    secondAudio.yield(pipelineAudioChunk(timestamp: 10))
-    try await pipelineEventually {
+    secondAudio.yield(orchestratorAudioChunk(timestamp: 10))
+    try await orchestratorEventually {
         let transcriptCount = await transcripts.count
         let capturedChunkCount = await diagnostics.latestCapturedChunkCount
         return transcriptCount == 2 && capturedChunkCount == 2
     }
 
     firstAudio.yieldDiagnostics(capturedChunkCount: 99)
-    firstAudio.yield(pipelineAudioChunk(timestamp: 99))
+    firstAudio.yield(orchestratorAudioChunk(timestamp: 99))
     try await Task.sleep(for: .milliseconds(50))
 
     #expect(factory.makeCount == 2)
@@ -540,7 +540,193 @@ func restartUsesFreshAudioEngineAndIgnoresPreviousSessionCallbacks() async throw
     #expect(secondAudio.startCount == 1)
     #expect(await transcripts.count == 2)
     #expect(await diagnostics.latestCapturedChunkCount == 2)
-    await pipeline.stop()
+    await runtime.stop()
+}
+
+@Test @MainActor
+func orchestratorPublishesOrderedLifecycleAndPropagatesWhisperTrace() async throws {
+    let hub = TypedEventHub()
+    let recorder = OrchestratorEventRecorder()
+    let sessionID = SessionID(rawValue: UUID())
+    let tokens = try await subscribeToRuntimeFacts(
+        hub: hub,
+        sessionID: sessionID,
+        recorder: recorder
+    )
+    let audio = PipelineAudioEngine()
+    let runtime = SessionOrchestrator(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: PipelineWhisperEngine(text: "Trace me"),
+        translationEngine: PipelineTranslationEngine(),
+        overlayEngine: PipelineOverlayEngine(),
+        settingsStore: PipelineSettingsStore(),
+        processMetricsSampler: DarwinProcessMetricsSampler(),
+        now: { .now },
+        eventHub: hub,
+        makeSessionID: { sessionID }
+    )
+
+    let started = await runtime.start(kind: .translation, onError: { _ in })
+    audio.yield(orchestratorAudioChunk(timestamp: 1))
+    try await orchestratorEventually { await recorder.translationCount == 1 }
+    await runtime.stop(reason: .cancelled)
+    try await orchestratorEventually { await recorder.endedCount == 1 }
+
+    #expect(started)
+    #expect(await recorder.sequences == [1, 2, 3, 4])
+    #expect(await recorder.startedKinds == [.translation])
+    #expect(await recorder.transcriptTraceIDs == recorder.translationTraceIDs)
+    #expect(await recorder.endReasons == [.cancelled])
+    for token in tokens { await hub.cancel(token) }
+}
+
+@Test @MainActor
+func startupFailureDoesNotPublishLifecycleFacts() async throws {
+    let hub = TypedEventHub()
+    let recorder = OrchestratorEventRecorder()
+    let sessionID = SessionID(rawValue: UUID())
+    let tokens = try await subscribeToRuntimeFacts(
+        hub: hub,
+        sessionID: sessionID,
+        recorder: recorder
+    )
+    let runtime = SessionOrchestrator(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [
+            PipelineAudioEngine(startError: MLingoError.noAudioSource),
+        ]),
+        whisperEngine: PipelineWhisperEngine(text: "unused"),
+        translationEngine: PipelineTranslationEngine(),
+        overlayEngine: PipelineOverlayEngine(),
+        settingsStore: PipelineSettingsStore(),
+        processMetricsSampler: DarwinProcessMetricsSampler(),
+        now: { .now },
+        eventHub: hub,
+        makeSessionID: { sessionID }
+    )
+
+    let started = await runtime.start(kind: .translation, onError: { _ in })
+
+    #expect(!started)
+    #expect(await recorder.sequences.isEmpty)
+    #expect(await recorder.endedCount == 0)
+    for token in tokens { await hub.cancel(token) }
+}
+
+@Test @MainActor
+func orchestratorRunsOfflineProviderTranslationEndToEnd() async throws {
+    let client = ScriptedTransportHTTPClient(outcomes: [
+        .response(
+            status: 200,
+            data: TransportFixtures.chatCompletionsSuccess(),
+            headers: [:]
+        ),
+    ])
+    let profile = OpenAICompatiblePresets.make(
+        kind: .ollama,
+        id: UUID(),
+        models: [.translation: ["fixture-model"]]
+    )
+    let selection = ResolvedProviderSelection(
+        capability: .translation,
+        profile: profile,
+        model: "fixture-model"
+    )
+    let providerEngine = ProviderTranslationEngine(
+        profileStore: RuntimeProfileStore(),
+        providerResolver: { selection in
+            try OpenAICompatibleTranslationProviderFactory.make(
+                selection: selection,
+                credentialStore: RuntimeEmptyCredentialStore(),
+                httpClient: client
+            )
+        }
+    )
+    let audio = PipelineAudioEngine()
+    let overlay = PipelineOverlayEngine()
+    let runtime = SessionOrchestrator(
+        audioEngineFactory: PipelineAudioEngineFactory(engines: [audio]),
+        whisperEngine: PipelineWhisperEngine(text: "Hello"),
+        translationEngine: providerEngine,
+        overlayEngine: overlay,
+        settingsStore: PipelineSettingsStore()
+    )
+
+    let started = await runtime.start(
+        kind: .translation,
+        translationSelection: selection,
+        onError: { _ in }
+    )
+    audio.yield(orchestratorAudioChunk(timestamp: 2))
+    try await orchestratorEventually { await overlay.updateCount == 1 }
+
+    #expect(started)
+    #expect(overlay.lastSubtitle?.translated == TransportFixtures.translated)
+    #expect(client.requests.last?.url?.path == "/v1/chat/completions")
+    await runtime.stop(reason: .cancelled)
+}
+
+private func subscribeToRuntimeFacts(
+    hub: TypedEventHub,
+    sessionID: SessionID,
+    recorder: OrchestratorEventRecorder
+) async throws -> [SubscriptionToken] {
+    let started = try await hub.subscribe(
+        to: SessionStarted.self,
+        scope: .session(sessionID),
+        delivery: .durable(capacity: 4)
+    ) { await recorder.append($0) }
+    let transcript = try await hub.subscribe(
+        to: TranscriptCompleted.self,
+        scope: .session(sessionID),
+        delivery: .durable(capacity: 4)
+    ) { await recorder.append($0) }
+    let translation = try await hub.subscribe(
+        to: TranslationCompleted.self,
+        scope: .session(sessionID),
+        delivery: .durable(capacity: 4)
+    ) { await recorder.append($0) }
+    let ended = try await hub.subscribe(
+        to: SessionEnded.self,
+        scope: .session(sessionID),
+        delivery: .durable(capacity: 4)
+    ) { await recorder.append($0) }
+    return [started, transcript, translation, ended]
+}
+
+private actor OrchestratorEventRecorder {
+    private var started: [EventEnvelope<SessionStarted>] = []
+    private var transcripts: [EventEnvelope<TranscriptCompleted>] = []
+    private var translations: [EventEnvelope<TranslationCompleted>] = []
+    private var ended: [EventEnvelope<SessionEnded>] = []
+
+    var sequences: [UInt64] {
+        (started.map(\.sequence)
+            + transcripts.map(\.sequence)
+            + translations.map(\.sequence)
+            + ended.map(\.sequence)).sorted()
+    }
+    var startedKinds: [SessionKind] { started.map(\.payload.kind) }
+    var transcriptTraceIDs: [TraceID] { transcripts.map(\.traceID) }
+    var translationTraceIDs: [TraceID] { translations.map(\.traceID) }
+    var endReasons: [SessionEndReason] { ended.map(\.payload.reason) }
+    var translationCount: Int { translations.count }
+    var endedCount: Int { ended.count }
+
+    func append(_ envelope: EventEnvelope<SessionStarted>) { started.append(envelope) }
+    func append(_ envelope: EventEnvelope<TranscriptCompleted>) { transcripts.append(envelope) }
+    func append(_ envelope: EventEnvelope<TranslationCompleted>) { translations.append(envelope) }
+    func append(_ envelope: EventEnvelope<SessionEnded>) { ended.append(envelope) }
+}
+
+private actor RuntimeProfileStore: ProviderProfileStoreProtocol {
+    func load() async throws -> ProviderConfiguration { ProviderConfiguration() }
+    func save(_ configuration: ProviderConfiguration) async throws {}
+}
+
+private final class RuntimeEmptyCredentialStore: ProviderCredentialStoreProtocol, Sendable {
+    func loadCredential(for id: CredentialID) throws -> String? { nil }
+    func saveCredential(_ secret: String, for id: CredentialID) throws {}
+    func deleteCredential(for id: CredentialID) throws {}
 }
 
 private final class PipelineAudioEngineFactory: AudioEngineFactoryProtocol, @unchecked Sendable {
@@ -857,7 +1043,7 @@ private actor SlowAudioDiagnosticsRecorder {
     }
 }
 
-private func pipelineEventually(
+private func orchestratorEventually(
     timeout: Duration = .seconds(1),
     condition: @escaping @Sendable () async -> Bool
 ) async throws {
@@ -870,7 +1056,7 @@ private func pipelineEventually(
     Issue.record("Condition was not met before timeout")
 }
 
-private func pipelineAudioChunk(timestamp: TimeInterval) -> AudioChunk {
+private func orchestratorAudioChunk(timestamp: TimeInterval) -> AudioChunk {
     AudioChunk(
         samples: Array(repeating: 0.05, count: 48_000),
         sampleRate: 16_000,
