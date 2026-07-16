@@ -2,12 +2,14 @@
 
 **Design:** [Platform design](../../specs/2026-07-15-mlingo-platform-design.md)
 
-**Status:** Milestones 01-02 complete; Milestone 03 implementation complete with its
+**Status:** Milestones 01-02 and 05 complete; Milestone 03 implementation complete with its
 loopback live proof deferred by owner waiver; Milestone 04 code-complete with manual
 accessibility acceptance pending.
 **Execution rule:** Complete and verify one milestone before starting the next. The owner
 has explicitly waived the external loopback proof for Milestone 03 until Ollama or LM
-Studio is installed; the unchecked proof is not treated as passed.
+Studio is installed. The owner has also explicitly allowed Milestone 05 to start while
+Milestone 04's manual accessibility acceptance remains pending. Neither waived gate is
+treated as passed.
 
 ## Locked decisions
 
@@ -64,3 +66,5 @@ Run a native Xcode Release build whenever a dependency, resource, entitlement, s
 - 2026-07-16: Milestone 03 implementation is code-complete. The production logging audit and redactor tests confirm request bodies, user text, bearer secrets, custom-header secrets, and unsafe request IDs are not emitted by default. The real loopback integration proof remains unchecked and deferred because neither Ollama nor LM Studio is installed. By explicit owner waiver, Milestone 04 may start without representing that external proof as passed.
 - 2026-07-16: Milestone 04 started. Work is scoped to transactional provider settings, independent capability assignments, native macOS Settings navigation, and accessibility acceptance.
 - 2026-07-16: Milestone 04 implementation is code-complete. Native eight-destination Settings, transactional provider/profile/Keychain persistence, draft connection probing, independent capability assignments, provider-based runtime readiness, deterministic validation/focus routing, and rollback recovery are implemented. Audit found four M04 files missing from the Xcode application target even though SwiftPM passed; project membership is fixed and guarded by a source-membership regression. The offline suite now passes 268 tests; SwiftPM Release build, native Release archive/signature validation, and diff checks pass. Native accessibility-tree and partial appearance/transaction evidence is recorded in the milestone file, but full VoiceOver, keyboard-only, largest-text, reduced-motion, Dark reopen, and fake-credential smoke acceptance remains unchecked, so Milestone 04 is not yet marked complete.
+- 2026-07-16: By explicit owner waiver, Milestone 05 started while Milestone 04 remains code-complete/manual-pending; the remaining M04 manual checks stay unchecked. M05 is scoped to a standalone actor-managed typed event hub in `MLingoCore`, with no runtime migration, UI, persistence, dependency, or `SubtitlePipeline` change.
+- 2026-07-16: Milestone 05 complete. Immutable typed envelopes and four initial facts, per-session sequence and trace metadata, exact type/session routing, bounded realtime drop-oldest/coalescing, lossless durable backpressure, typed metrics, handler-failure isolation, idempotent cancellation, and shutdown race handling are implemented in standalone `MLingoCore`. Focused tests pass (2 EventEnvelope, 14 TypedEventHub, 1 EventFacts); the full suite passes 285 tests, Release build passes with the classified upstream MLXAudioVAD README warning, and whitespace plus unchanged-`SubtitlePipeline.swift` gates pass. M04's manual acceptance remains pending under the recorded owner waiver.
