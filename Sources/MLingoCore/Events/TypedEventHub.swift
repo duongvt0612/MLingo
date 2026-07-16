@@ -115,7 +115,7 @@ public actor TypedEventHub {
             scope: scope,
             enqueue: { value in
                 guard let envelope = value as? EventEnvelope<Event> else { return }
-                await mailbox.enqueue(envelope)
+                try await mailbox.enqueue(envelope)
             },
             cancel: {
                 await mailbox.cancel()
@@ -127,17 +127,21 @@ public actor TypedEventHub {
                 await mailbox.waitForSuspendedPublishers(count)
             }
         )
+        // Start the mailbox before registering so a closed hub never advertises a
+        // live token for a worker that is about to be torn down, and so a
+        // duplicate-token rejection can cancel the unused mailbox cleanly.
+        await mailbox.start(handler: handler) { [weak self] in
+            await self?.subscriptionDidFail(token)
+        }
+        guard !isClosed else {
+            await mailbox.cancel()
+            throw TypedEventHubError.closed
+        }
         guard subscriptions[token] == nil else {
-            // Preserve the active subscription; cancel the unused mailbox so its
-            // worker cannot start and leak after a duplicate-token rejection.
             await mailbox.cancel()
             throw TypedEventHubError.duplicateSubscriptionToken(token)
         }
         subscriptions[token] = record
-
-        await mailbox.start(handler: handler) { [weak self] in
-            await self?.subscriptionDidFail(token)
-        }
         return token
     }
 
@@ -175,7 +179,7 @@ public actor TypedEventHub {
         // each mailbox's producer waiters (suspendedPublishers), so a full
         // durable subscription blocks only publications that target it.
         for subscription in matchingSubscriptions {
-            await subscription.enqueue(envelope)
+            try await subscription.enqueue(envelope)
         }
         return envelope
     }
@@ -231,7 +235,7 @@ func nextEventSequence(after sequence: UInt64, sessionID: SessionID) throws -> U
 private struct AnyEventSubscription: Sendable {
     let eventType: ObjectIdentifier
     let scope: EventSubscriptionScope
-    let enqueue: @Sendable (any Sendable) async -> Void
+    let enqueue: @Sendable (any Sendable) async throws -> Void
     let cancel: @Sendable () async -> Void
     let metrics: @Sendable () async -> EventDeliveryMetrics
     let waitForSuspendedPublishers: @Sendable (Int) async -> Bool
@@ -244,8 +248,9 @@ private actor EventMailbox<Event: EventFact> {
     }
 
     private struct ProducerWaiter {
+        let id: UUID
         let envelope: EventEnvelope<Event>
-        let continuation: CheckedContinuation<Void, Never>
+        let continuation: CheckedContinuation<Void, any Error>
     }
 
     private let capacity: Int
@@ -253,6 +258,7 @@ private actor EventMailbox<Event: EventFact> {
     private var buffer: [EventEnvelope<Event>] = []
     private var consumerWaiter: CheckedContinuation<EventEnvelope<Event>?, Never>?
     private var producerWaiters: [ProducerWaiter] = []
+    private var cancelledProducerIDs: Set<UUID> = []
     private var suspensionObservers: [(
         count: Int,
         continuation: CheckedContinuation<Bool, Never>
@@ -290,7 +296,7 @@ private actor EventMailbox<Event: EventFact> {
         }
     }
 
-    func enqueue(_ envelope: EventEnvelope<Event>) async {
+    func enqueue(_ envelope: EventEnvelope<Event>) async throws {
         guard !isTerminated else { return }
         enqueued += 1
 
@@ -309,13 +315,33 @@ private actor EventMailbox<Event: EventFact> {
         case let .realtime(overflow):
             applyRealtimeOverflow(overflow, incoming: envelope)
         case .durable:
-            await withCheckedContinuation { continuation in
-                producerWaiters.append(ProducerWaiter(
-                    envelope: envelope,
-                    continuation: continuation
-                ))
-                resumeSatisfiedSuspensionObservers()
+            let waiterID = UUID()
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                    if Task.isCancelled || cancelledProducerIDs.remove(waiterID) != nil {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+                    producerWaiters.append(ProducerWaiter(
+                        id: waiterID,
+                        envelope: envelope,
+                        continuation: continuation
+                    ))
+                    resumeSatisfiedSuspensionObservers()
+                }
+            } onCancel: {
+                Task { await self.cancelProducerWaiter(id: waiterID) }
             }
+        }
+    }
+
+    private func cancelProducerWaiter(id: UUID) {
+        if let index = producerWaiters.firstIndex(where: { $0.id == id }) {
+            let waiter = producerWaiters.remove(at: index)
+            waiter.continuation.resume(throwing: CancellationError())
+        } else {
+            // Cancellation raced ahead of waiter registration.
+            cancelledProducerIDs.insert(id)
         }
     }
 
@@ -330,6 +356,7 @@ private actor EventMailbox<Event: EventFact> {
             waiter.continuation.resume()
         }
         producerWaiters.removeAll(keepingCapacity: false)
+        cancelledProducerIDs.removeAll(keepingCapacity: false)
         for observer in suspensionObservers {
             observer.continuation.resume(returning: false)
         }
