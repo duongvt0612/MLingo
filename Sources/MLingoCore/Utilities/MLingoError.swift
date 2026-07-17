@@ -19,6 +19,9 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
     case whisperModelUnavailable(String)
     case whisperModelLoadFailed(String)
     case whisperInferenceFailed(String)
+    case localModelUnavailable(String)
+    case localModelLoadFailed(String)
+    case insufficientLocalModelMemory(requiredBytes: UInt64, availableBytes: UInt64)
     case invalidAPIKey
     case invalidOpenAIModel
     case quotaExceeded
@@ -54,6 +57,12 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
             message
         case .whisperInferenceFailed(let message):
             message
+        case .localModelUnavailable(let message):
+            message
+        case .localModelLoadFailed(let message):
+            message
+        case .insufficientLocalModelMemory(let requiredBytes, let availableBytes):
+            "The selected local model needs \(Self.formatBytes(requiredBytes)) of unified memory, but only \(Self.formatBytes(availableBytes)) is available. Choose a smaller local model or close other apps."
         case .invalidAPIKey:
             "The provider API key is invalid. Update it in Settings and start a new translation session."
         case .invalidOpenAIModel:
@@ -95,10 +104,20 @@ public enum MLingoError: LocalizedError, Equatable, Sendable {
              .translationInputTooLong,
              .invalidTranslationConfiguration,
              .invalidSettings,
+             .localModelUnavailable,
+             .localModelLoadFailed,
+             .insufficientLocalModelMemory,
              .translationRequestRejected:
             true
         default:
             false
         }
+    }
+
+    private static func formatBytes(_ bytes: UInt64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB, .useGB]
+        formatter.countStyle = .memory
+        return formatter.string(fromByteCount: Int64(clamping: bytes))
     }
 }
