@@ -151,10 +151,14 @@ final class MLingoViewModel {
             legacyAPIKeyStore: legacyAPIKeyStore
         )
         let overlay = FloatingSubtitleWindowController()
+        let builtInMLXProvider = BuiltInMLXProvider()
         let translation = ProviderTranslationEngine(
             profileStore: profileStore,
             providerResolver: { selection in
-                try OpenAICompatibleTranslationProviderFactory.make(
+                if selection.profile.kind == .builtInMLX {
+                    return builtInMLXProvider
+                }
+                return try OpenAICompatibleTranslationProviderFactory.make(
                     selection: selection,
                     credentialStore: credentialStore
                 )

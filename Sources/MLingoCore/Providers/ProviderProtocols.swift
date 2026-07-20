@@ -77,6 +77,10 @@ public protocol ChatProvider: AnyObject, Sendable {
     func respond(to request: ChatRequest) async throws -> ChatResponse
 }
 
+public protocol ChatStreamingProvider: ChatProvider {
+    func streamResponse(to request: ChatRequest) -> AsyncThrowingStream<String, Error>
+}
+
 public struct EmbeddingRequest: Equatable, Sendable {
     public let inputs: [String]
     public let model: String

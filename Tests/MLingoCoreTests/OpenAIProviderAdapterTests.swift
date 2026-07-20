@@ -219,6 +219,30 @@ func openAICompatibleFactoryRejectsNativeAPIStyleBeforeConstructingProvider() {
 }
 
 @Test
+func openAICompatibleFactoryNeverRoutesBuiltInKindToHTTP() {
+    let profile = ProviderProfile(
+        name: "Malformed Built-in MLX",
+        kind: .builtInMLX,
+        endpoint: URL(string: "https://example.com/v1"),
+        apiStyle: .responses,
+        authentication: .none,
+        models: [.translation: ["/local/model"]]
+    )
+    let selection = ResolvedProviderSelection(
+        capability: .translation,
+        profile: profile,
+        model: "/local/model"
+    )
+
+    #expect(throws: MLingoError.self) {
+        _ = try OpenAICompatibleTranslationProviderFactory.make(
+            selection: selection,
+            credentialStore: AdapterCredentialStore()
+        )
+    }
+}
+
+@Test
 func legacyOpenAIMigrationRollsBackNewCredentialWhenProfileSaveFails() async {
     let profileStore = AdapterProfileStore(saveError: AdapterTestError.saveFailed)
     let credentials = AdapterCredentialStore()

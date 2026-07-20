@@ -61,7 +61,10 @@ struct AppIssuePresentation: Equatable, Sendable {
              .invalidTranslationConfiguration,
              .invalidSettings,
              .credentialStoreFailure,
-             .translationRequestRejected:
+             .translationRequestRejected,
+             .localModelUnavailable,
+             .localModelLoadFailed,
+             .insufficientLocalModelMemory:
             .openSettings
         case .rateLimited,
              .networkOffline,

@@ -22,6 +22,18 @@ let package = Package(
             url: "https://github.com/Blaizzy/mlx-audio-swift.git",
             exact: "0.1.3"
         ),
+        .package(
+            url: "https://github.com/ml-explore/mlx-swift-lm.git",
+            exact: "3.31.4"
+        ),
+        .package(
+            url: "https://github.com/huggingface/swift-huggingface.git",
+            exact: "0.9.0"
+        ),
+        .package(
+            url: "https://github.com/huggingface/swift-transformers.git",
+            exact: "1.3.3"
+        ),
         // swift-transformers 1.x is not source-compatible with swift-jinja 2.4.
         .package(
             url: "https://github.com/huggingface/swift-jinja.git",
@@ -34,6 +46,12 @@ let package = Package(
             dependencies: [
                 .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
                 .product(name: "MLXAudioSTT", package: "mlx-audio-swift"),
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "MLXEmbedders", package: "mlx-swift-lm"),
+                .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
+                .product(name: "HuggingFace", package: "swift-huggingface"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
                 // Keep swift-transformers on the source-compatible Jinja release.
                 .product(name: "Jinja", package: "swift-jinja")
             ],
