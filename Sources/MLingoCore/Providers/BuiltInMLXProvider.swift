@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import HuggingFace
 import MLX
@@ -31,7 +32,7 @@ public final class BuiltInMLXProvider: TranslationProvider,
     private let runtime: BuiltInMLXRuntime
 
     public convenience init() {
-        self.init(runtime: BuiltInMLXRuntime())
+        self.init(runtime: .shared)
     }
 
     init(runtime: BuiltInMLXRuntime) {
@@ -100,6 +101,8 @@ public final class BuiltInMLXProvider: TranslationProvider,
 }
 
 actor BuiltInMLXRuntime {
+    static let shared = BuiltInMLXRuntime()
+
     private struct LoadedChatModel {
         let runner: any BuiltInMLXChatRunning
         var activeLeases: Int
@@ -112,6 +115,18 @@ actor BuiltInMLXRuntime {
         var unloadTask: Task<Void, Never>?
     }
 
+    private struct LoadingChatModel {
+        let id: UUID
+        let task: Task<any BuiltInMLXChatRunning, Error>
+        var waiters: [UUID: CheckedContinuation<any BuiltInMLXChatRunning, any Error>]
+    }
+
+    private struct LoadingEmbeddingModel {
+        let id: UUID
+        let task: Task<any BuiltInMLXEmbeddingRunning, Error>
+        var waiters: [UUID: CheckedContinuation<any BuiltInMLXEmbeddingRunning, any Error>]
+    }
+
     private let chatLoader: BuiltInMLXChatLoader
     private let embeddingLoader: BuiltInMLXEmbeddingLoader
     private let memorySampler: any LocalModelMemorySampling
@@ -120,9 +135,9 @@ actor BuiltInMLXRuntime {
     private let fileManager: FileManager
 
     private var loadedChatModels: [URL: LoadedChatModel] = [:]
-    private var loadingChatModels: [URL: Task<any BuiltInMLXChatRunning, Error>] = [:]
+    private var loadingChatModels: [URL: LoadingChatModel] = [:]
     private var loadedEmbeddingModels: [URL: LoadedEmbeddingModel] = [:]
-    private var loadingEmbeddingModels: [URL: Task<any BuiltInMLXEmbeddingRunning, Error>] = [:]
+    private var loadingEmbeddingModels: [URL: LoadingEmbeddingModel] = [:]
 
     var activeLeaseCount: Int {
         loadedChatModels.values.reduce(0) { $0 + $1.activeLeases }
@@ -131,6 +146,10 @@ actor BuiltInMLXRuntime {
 
     var loadedChatModelCount: Int {
         loadedChatModels.count
+    }
+
+    var loadingChatWaiterCount: Int {
+        loadingChatModels.values.reduce(0) { $0 + $1.waiters.count }
     }
 
     init(
@@ -185,13 +204,19 @@ actor BuiltInMLXRuntime {
         let runner: any BuiltInMLXEmbeddingRunning
         do {
             runner = try await acquireEmbeddingModel(at: directory)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw mapLoadError(error, model: model)
+        }
+        if Task.isCancelled {
+            releaseEmbeddingModel(at: directory)
+            throw CancellationError()
         }
         do {
             let vectors = try await runner.embed(inputs)
             releaseEmbeddingModel(at: directory)
-            return Self.normalize(vectors)
+            return try Self.normalize(vectors, expectedCount: inputs.count)
         } catch is CancellationError {
             releaseEmbeddingModel(at: directory)
             throw CancellationError()
@@ -217,8 +242,16 @@ actor BuiltInMLXRuntime {
         let runner: any BuiltInMLXChatRunning
         do {
             runner = try await acquireChatModel(at: directory)
+        } catch is CancellationError {
+            continuation.finish(throwing: CancellationError())
+            return
         } catch {
             continuation.finish(throwing: mapLoadError(error, model: model))
+            return
+        }
+        if Task.isCancelled {
+            releaseChatModel(at: directory)
+            continuation.finish(throwing: CancellationError())
             return
         }
 
@@ -239,84 +272,202 @@ actor BuiltInMLXRuntime {
     }
 
     private func acquireChatModel(at directory: URL) async throws -> any BuiltInMLXChatRunning {
-        if var loaded = loadedChatModels[directory] {
-            loaded.unloadTask?.cancel()
-            loaded.unloadTask = nil
-            loaded.activeLeases += 1
-            loadedChatModels[directory] = loaded
-            return loaded.runner
-        }
-
-        let task: Task<any BuiltInMLXChatRunning, Error>
-        if let existing = loadingChatModels[directory] {
-            task = existing
-        } else {
+        try Task.checkCancellation()
+        if let runner = leaseLoadedChatModel(at: directory) { return runner }
+        if loadingChatModels[directory] == nil {
             try await preflight(directory)
-            task = Task { try await chatLoader(directory) }
-            loadingChatModels[directory] = task
-        }
-
-        do {
-            let runner = try await task.value
-            loadingChatModels[directory] = nil
-            if var loaded = loadedChatModels[directory] {
-                loaded.unloadTask?.cancel()
-                loaded.unloadTask = nil
-                loaded.activeLeases += 1
-                loadedChatModels[directory] = loaded
-            } else {
-                loadedChatModels[directory] = LoadedChatModel(
-                    runner: runner,
-                    activeLeases: 1,
-                    unloadTask: nil
-                )
+            try Task.checkCancellation()
+            if let runner = leaseLoadedChatModel(at: directory) { return runner }
+            if loadingChatModels[directory] == nil {
+                startChatModelLoad(at: directory)
             }
-            return runner
-        } catch {
-            loadingChatModels[directory] = nil
-            throw error
         }
+        let runner = try await waitForChatModel(at: directory)
+        if Task.isCancelled {
+            releaseChatModel(at: directory)
+            throw CancellationError()
+        }
+        return runner
     }
 
     private func acquireEmbeddingModel(
         at directory: URL
     ) async throws -> any BuiltInMLXEmbeddingRunning {
-        if var loaded = loadedEmbeddingModels[directory] {
-            loaded.unloadTask?.cancel()
-            loaded.unloadTask = nil
-            loaded.activeLeases += 1
-            loadedEmbeddingModels[directory] = loaded
-            return loaded.runner
-        }
-
-        let task: Task<any BuiltInMLXEmbeddingRunning, Error>
-        if let existing = loadingEmbeddingModels[directory] {
-            task = existing
-        } else {
+        try Task.checkCancellation()
+        if let runner = leaseLoadedEmbeddingModel(at: directory) { return runner }
+        if loadingEmbeddingModels[directory] == nil {
             try await preflight(directory)
-            task = Task { try await embeddingLoader(directory) }
-            loadingEmbeddingModels[directory] = task
-        }
-
-        do {
-            let runner = try await task.value
-            loadingEmbeddingModels[directory] = nil
-            if var loaded = loadedEmbeddingModels[directory] {
-                loaded.unloadTask?.cancel()
-                loaded.unloadTask = nil
-                loaded.activeLeases += 1
-                loadedEmbeddingModels[directory] = loaded
-            } else {
-                loadedEmbeddingModels[directory] = LoadedEmbeddingModel(
-                    runner: runner,
-                    activeLeases: 1,
-                    unloadTask: nil
-                )
+            try Task.checkCancellation()
+            if let runner = leaseLoadedEmbeddingModel(at: directory) { return runner }
+            if loadingEmbeddingModels[directory] == nil {
+                startEmbeddingModelLoad(at: directory)
             }
-            return runner
-        } catch {
+        }
+        let runner = try await waitForEmbeddingModel(at: directory)
+        if Task.isCancelled {
+            releaseEmbeddingModel(at: directory)
+            throw CancellationError()
+        }
+        return runner
+    }
+
+    private func leaseLoadedChatModel(
+        at directory: URL
+    ) -> (any BuiltInMLXChatRunning)? {
+        guard var loaded = loadedChatModels[directory] else { return nil }
+        loaded.unloadTask?.cancel()
+        loaded.unloadTask = nil
+        loaded.activeLeases += 1
+        loadedChatModels[directory] = loaded
+        return loaded.runner
+    }
+
+    private func leaseLoadedEmbeddingModel(
+        at directory: URL
+    ) -> (any BuiltInMLXEmbeddingRunning)? {
+        guard var loaded = loadedEmbeddingModels[directory] else { return nil }
+        loaded.unloadTask?.cancel()
+        loaded.unloadTask = nil
+        loaded.activeLeases += 1
+        loadedEmbeddingModels[directory] = loaded
+        return loaded.runner
+    }
+
+    private func startChatModelLoad(at directory: URL) {
+        let id = UUID()
+        let task = Task { try await chatLoader(directory) }
+        loadingChatModels[directory] = LoadingChatModel(id: id, task: task, waiters: [:])
+        Task {
+            let result = await task.result
+            completeChatModelLoad(at: directory, id: id, result: result)
+        }
+    }
+
+    private func startEmbeddingModelLoad(at directory: URL) {
+        let id = UUID()
+        let task = Task { try await embeddingLoader(directory) }
+        loadingEmbeddingModels[directory] = LoadingEmbeddingModel(
+            id: id,
+            task: task,
+            waiters: [:]
+        )
+        Task {
+            let result = await task.result
+            completeEmbeddingModelLoad(at: directory, id: id, result: result)
+        }
+    }
+
+    private func waitForChatModel(
+        at directory: URL
+    ) async throws -> any BuiltInMLXChatRunning {
+        let waiterID = UUID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<any BuiltInMLXChatRunning, any Error>) in
+                guard !Task.isCancelled, var loading = loadingChatModels[directory] else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                loading.waiters[waiterID] = continuation
+                loadingChatModels[directory] = loading
+            }
+        } onCancel: {
+            Task { await self.cancelChatModelWaiter(at: directory, id: waiterID) }
+        }
+    }
+
+    private func waitForEmbeddingModel(
+        at directory: URL
+    ) async throws -> any BuiltInMLXEmbeddingRunning {
+        let waiterID = UUID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<any BuiltInMLXEmbeddingRunning, any Error>) in
+                guard !Task.isCancelled, var loading = loadingEmbeddingModels[directory] else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                loading.waiters[waiterID] = continuation
+                loadingEmbeddingModels[directory] = loading
+            }
+        } onCancel: {
+            Task { await self.cancelEmbeddingModelWaiter(at: directory, id: waiterID) }
+        }
+    }
+
+    private func cancelChatModelWaiter(at directory: URL, id: UUID) {
+        guard var loading = loadingChatModels[directory],
+              let continuation = loading.waiters.removeValue(forKey: id)
+        else { return }
+        continuation.resume(throwing: CancellationError())
+        if loading.waiters.isEmpty {
+            loadingChatModels[directory] = nil
+            loading.task.cancel()
+        } else {
+            loadingChatModels[directory] = loading
+        }
+    }
+
+    private func cancelEmbeddingModelWaiter(at directory: URL, id: UUID) {
+        guard var loading = loadingEmbeddingModels[directory],
+              let continuation = loading.waiters.removeValue(forKey: id)
+        else { return }
+        continuation.resume(throwing: CancellationError())
+        if loading.waiters.isEmpty {
             loadingEmbeddingModels[directory] = nil
-            throw error
+            loading.task.cancel()
+        } else {
+            loadingEmbeddingModels[directory] = loading
+        }
+    }
+
+    private func completeChatModelLoad(
+        at directory: URL,
+        id: UUID,
+        result: Result<any BuiltInMLXChatRunning, any Error>
+    ) {
+        guard let loading = loadingChatModels[directory], loading.id == id else { return }
+        loadingChatModels[directory] = nil
+        switch result {
+        case .success(let runner):
+            guard !loading.waiters.isEmpty else { return }
+            loadedChatModels[directory] = LoadedChatModel(
+                runner: runner,
+                activeLeases: loading.waiters.count,
+                unloadTask: nil
+            )
+            for continuation in loading.waiters.values {
+                continuation.resume(returning: runner)
+            }
+        case .failure(let error):
+            for continuation in loading.waiters.values {
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
+    private func completeEmbeddingModelLoad(
+        at directory: URL,
+        id: UUID,
+        result: Result<any BuiltInMLXEmbeddingRunning, any Error>
+    ) {
+        guard let loading = loadingEmbeddingModels[directory], loading.id == id else { return }
+        loadingEmbeddingModels[directory] = nil
+        switch result {
+        case .success(let runner):
+            guard !loading.waiters.isEmpty else { return }
+            loadedEmbeddingModels[directory] = LoadedEmbeddingModel(
+                runner: runner,
+                activeLeases: loading.waiters.count,
+                unloadTask: nil
+            )
+            for continuation in loading.waiters.values {
+                continuation.resume(returning: runner)
+            }
+        case .failure(let error):
+            for continuation in loading.waiters.values {
+                continuation.resume(throwing: error)
+            }
         }
     }
 
@@ -405,7 +556,7 @@ actor BuiltInMLXRuntime {
                 "The selected local MLX model directory does not exist."
             )
         }
-        return directory.standardizedFileURL
+        return directory.standardizedFileURL.resolvingSymlinksInPath()
     }
 
     private func mapLoadError(_ error: any Error, model: String) -> MLingoError {
@@ -415,12 +566,27 @@ actor BuiltInMLXRuntime {
         )
     }
 
-    private static func normalize(_ vectors: [[Float]]) -> [[Float]] {
-        vectors.map { vector in
+    private static func normalize(
+        _ vectors: [[Float]],
+        expectedCount: Int
+    ) throws -> [[Float]] {
+        guard vectors.count == expectedCount,
+              let dimension = vectors.first?.count,
+              dimension > 0,
+              vectors.allSatisfy({ vector in
+                  vector.count == dimension && vector.allSatisfy(\.isFinite)
+              })
+        else {
+            throw MLingoError.localModelLoadFailed(
+                "The local embedding model returned an invalid vector shape."
+            )
+        }
+
+        return vectors.map { vector in
             let norm = sqrt(vector.reduce(Double(0)) { partial, value in
-                partial + Double(value * value)
+                partial + Double(value) * Double(value)
             })
-            guard norm > 0 else { return vector }
+            guard norm > 0, norm.isFinite else { return vector }
             return vector.map { Float(Double($0) / norm) }
         }
     }
@@ -429,17 +595,13 @@ actor BuiltInMLXRuntime {
 private final class DefaultBuiltInMLXChatRunner: BuiltInMLXChatRunning,
     @unchecked Sendable
 {
-    private let session: ChatSession
+    private let container: ModelContainer
 
     init(modelDirectory: URL) async throws {
         do {
-            let container = try await LLMModelFactory.shared.loadContainer(
+            container = try await LLMModelFactory.shared.loadContainer(
                 from: modelDirectory,
                 using: #huggingFaceTokenizerLoader()
-            )
-            session = ChatSession(
-                container,
-                generateParameters: GenerateParameters(maxTokens: 512, temperature: 0)
             )
         } catch is CancellationError {
             throw CancellationError()
@@ -449,7 +611,13 @@ private final class DefaultBuiltInMLXChatRunner: BuiltInMLXChatRunning,
     }
 
     func streamResponse(to messages: [ChatMessage]) -> AsyncThrowingStream<String, Error> {
-        session.streamResponse(to: messages.map(Self.message(from:)))
+        // ChatSession owns mutable history/KV cache and is explicitly not thread-safe.
+        // Keep only the thread-safe ModelContainer resident and create isolated request sessions.
+        let session = ChatSession(
+            container,
+            generateParameters: GenerateParameters(maxTokens: 512, temperature: 0)
+        )
+        return session.streamResponse(to: messages.map(Self.message(from:)))
     }
 
     private static func message(from message: ChatMessage) -> Chat.Message {
@@ -519,13 +687,29 @@ private final class DefaultBuiltInMLXEmbeddingRunner: BuiltInMLXEmbeddingRunning
 
 private struct DefaultLocalModelMemorySampler: LocalModelMemorySampling {
     func availableMemoryBytes() async -> UInt64 {
-        let physical = ProcessInfo.processInfo.physicalMemory
-        guard let sample = await DarwinProcessMetricsSampler().sample() else {
-            return physical
+        var statistics = vm_statistics64()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size
+        )
+        let result = withUnsafeMutablePointer(to: &statistics) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                host_statistics64(
+                    mach_host_self(),
+                    HOST_VM_INFO64,
+                    $0,
+                    &count
+                )
+            }
         }
-        return physical > sample.residentMemoryBytes
-            ? physical - sample.residentMemoryBytes
-            : 0
+        guard result == KERN_SUCCESS else { return 0 }
+
+        var pageSize: vm_size_t = 0
+        guard host_page_size(mach_host_self(), &pageSize) == KERN_SUCCESS else { return 0 }
+        let reclaimablePages = UInt64(statistics.free_count)
+            + UInt64(statistics.inactive_count)
+            + UInt64(statistics.speculative_count)
+            + UInt64(statistics.purgeable_count)
+        return reclaimablePages * UInt64(pageSize)
     }
 }
 
@@ -533,8 +717,7 @@ private enum DirectoryLocalModelFileSizer {
     static func size(_ directory: URL) throws -> UInt64 {
         let resourceKeys: [URLResourceKey] = [
             .isRegularFileKey,
-            .fileAllocatedSizeKey,
-            .totalFileAllocatedSizeKey,
+            .fileSizeKey,
         ]
         guard let enumerator = FileManager.default.enumerator(
             at: directory,
@@ -550,8 +733,7 @@ private enum DirectoryLocalModelFileSizer {
         for case let url as URL in enumerator {
             let values = try url.resourceValues(forKeys: Set(resourceKeys))
             guard values.isRegularFile == true else { continue }
-            let allocated = values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? 0
-            total += UInt64(max(allocated, 0))
+            total += UInt64(max(values.fileSize ?? 0, 0))
         }
         return total
     }

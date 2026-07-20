@@ -3,15 +3,12 @@ import Testing
 @testable import MLingoCore
 
 @Test
-func builtInMLXTranslationMapsPromptAndNeverTouchesNetwork() async throws {
-    NetworkSpyURLProtocol.reset()
-    URLProtocol.registerClass(NetworkSpyURLProtocol.self)
-    defer { URLProtocol.unregisterClass(NetworkSpyURLProtocol.self) }
-
+func builtInMLXTranslationMapsPromptAndUsesLocalModelDirectory() async throws {
     let modelDirectory = try makeTemporaryModelDirectory()
     let chat = FakeBuiltInChatRunner(chunks: [" Xin", " chao "])
+    let loader = CountingBuiltInChatLoader(runner: chat)
     let runtime = BuiltInMLXRuntime(
-        chatLoader: { _ in chat },
+        chatLoader: { url in try await loader.load(url) },
         embeddingLoader: { _ in FakeBuiltInEmbeddingRunner(vectors: []) },
         memorySampler: FixedLocalModelMemorySampler(availableBytes: 1_000_000),
         fileSizer: { _ in 64 },
@@ -40,7 +37,7 @@ func builtInMLXTranslationMapsPromptAndNeverTouchesNetwork() async throws {
     #expect(messages.first?.content.contains("Translate English subtitles into Vietnamese") == true)
     #expect(messages.last?.content.contains("Previous line") == true)
     #expect(messages.last?.content.contains("Hello") == true)
-    #expect(NetworkSpyURLProtocol.requestCount == 0)
+    #expect(await loader.loadedURLs == [modelDirectory.resolvingSymlinksInPath()])
 }
 
 @Test
@@ -164,6 +161,114 @@ func builtInMLXRuntimeFailsPreflightBeforeLoadingOversizedModel() async throws {
         )
     }
     #expect(await loader.loadCount == 0)
+}
+
+@Test
+func builtInMLXChatCancellationCancelsAnInFlightModelLoad() async throws {
+    let modelDirectory = try makeTemporaryModelDirectory()
+    let loader = CancellableBuiltInChatLoader(
+        runner: FakeBuiltInChatRunner(chunks: ["unused"])
+    )
+    let runtime = BuiltInMLXRuntime(
+        chatLoader: { url in try await loader.load(url) },
+        embeddingLoader: { _ in FakeBuiltInEmbeddingRunner(vectors: []) },
+        memorySampler: FixedLocalModelMemorySampler(availableBytes: 1_000_000),
+        fileSizer: { _ in 64 },
+        idleUnloadDelay: .milliseconds(50)
+    )
+    let provider = BuiltInMLXProvider(runtime: runtime)
+    let task = Task {
+        try await provider.respond(
+            to: ChatRequest(
+                messages: [ChatMessage(role: .user, content: "Hello")],
+                model: modelDirectory.path
+            )
+        )
+    }
+
+    try await builtInEventually { await loader.started }
+    task.cancel()
+    do {
+        try await builtInEventually { await loader.wasCancelled }
+    } catch {
+        await loader.release()
+        _ = try? await task.value
+        throw error
+    }
+
+    _ = try? await task.value
+}
+
+@Test
+func cancellingOneChatWaiterKeepsTheSharedModelLoadAlive() async throws {
+    let modelDirectory = try makeTemporaryModelDirectory()
+    let loader = CancellableBuiltInChatLoader(
+        runner: FakeBuiltInChatRunner(chunks: ["ok"])
+    )
+    let runtime = BuiltInMLXRuntime(
+        chatLoader: { url in try await loader.load(url) },
+        embeddingLoader: { _ in FakeBuiltInEmbeddingRunner(vectors: []) },
+        memorySampler: FixedLocalModelMemorySampler(availableBytes: 1_000_000),
+        fileSizer: { _ in 64 },
+        idleUnloadDelay: .milliseconds(50)
+    )
+    let provider = BuiltInMLXProvider(runtime: runtime)
+    let request = ChatRequest(
+        messages: [ChatMessage(role: .user, content: "Hello")],
+        model: modelDirectory.path
+    )
+    let first = Task { try await provider.respond(to: request) }
+    let second = Task { try await provider.respond(to: request) }
+
+    try await builtInEventually { await runtime.loadingChatWaiterCount == 2 }
+    first.cancel()
+    try await builtInEventually { await runtime.loadingChatWaiterCount == 1 }
+    #expect(await loader.loadCount == 1)
+    #expect(await !loader.wasCancelled)
+
+    await loader.release()
+    #expect(try await second.value.text == "ok")
+    _ = try? await first.value
+}
+
+@Test
+func builtInMLXEmbeddingLoadPreservesCancellationError() async throws {
+    let modelDirectory = try makeTemporaryModelDirectory()
+    let runtime = BuiltInMLXRuntime(
+        chatLoader: { _ in FakeBuiltInChatRunner(chunks: []) },
+        embeddingLoader: { _ in throw CancellationError() },
+        memorySampler: FixedLocalModelMemorySampler(availableBytes: 1_000_000),
+        fileSizer: { _ in 64 },
+        idleUnloadDelay: .milliseconds(50)
+    )
+    let provider = BuiltInMLXProvider(runtime: runtime)
+
+    await #expect(throws: CancellationError.self) {
+        _ = try await provider.embed(
+            EmbeddingRequest(inputs: ["hello"], model: modelDirectory.path)
+        )
+    }
+}
+
+@Test
+func builtInMLXRejectsMalformedEmbeddingShapes() async throws {
+    let modelDirectory = try makeTemporaryModelDirectory()
+    let runtime = BuiltInMLXRuntime(
+        chatLoader: { _ in FakeBuiltInChatRunner(chunks: []) },
+        embeddingLoader: { _ in
+            FakeBuiltInEmbeddingRunner(vectors: [[1, 0]])
+        },
+        memorySampler: FixedLocalModelMemorySampler(availableBytes: 1_000_000),
+        fileSizer: { _ in 64 },
+        idleUnloadDelay: .milliseconds(50)
+    )
+    let provider = BuiltInMLXProvider(runtime: runtime)
+
+    await #expect(throws: MLingoError.self) {
+        _ = try await provider.embed(
+            EmbeddingRequest(inputs: ["first", "second"], model: modelDirectory.path)
+        )
+    }
 }
 
 @Test
@@ -323,6 +428,7 @@ private actor FakeBuiltInEmbeddingRunner: BuiltInMLXEmbeddingRunning {
 private actor CountingBuiltInChatLoader {
     private let runner: any BuiltInMLXChatRunning
     private(set) var loadCount = 0
+    private(set) var loadedURLs: [URL] = []
 
     init(runner: any BuiltInMLXChatRunning) {
         self.runner = runner
@@ -330,7 +436,38 @@ private actor CountingBuiltInChatLoader {
 
     func load(_ url: URL) async throws -> any BuiltInMLXChatRunning {
         loadCount += 1
+        loadedURLs.append(url)
         return runner
+    }
+}
+
+private actor CancellableBuiltInChatLoader {
+    private let runner: any BuiltInMLXChatRunning
+    private(set) var started = false
+    private(set) var wasCancelled = false
+    private(set) var loadCount = 0
+    private var released = false
+
+    init(runner: any BuiltInMLXChatRunning) {
+        self.runner = runner
+    }
+
+    func load(_ url: URL) async throws -> any BuiltInMLXChatRunning {
+        loadCount += 1
+        started = true
+        while !released {
+            do {
+                try await Task.sleep(for: .milliseconds(5))
+            } catch is CancellationError {
+                wasCancelled = true
+                throw CancellationError()
+            }
+        }
+        return runner
+    }
+
+    func release() {
+        released = true
     }
 }
 
@@ -354,41 +491,6 @@ private actor BuiltInProfileStore: ProviderProfileStoreProtocol {
     }
 
     func save(_ configuration: ProviderConfiguration) async throws {}
-}
-
-private final class NetworkSpyURLProtocol: URLProtocol, @unchecked Sendable {
-    private static let counter = NetworkSpyCounter()
-    static var requestCount: Int { counter.value }
-
-    static func reset() {
-        counter.reset()
-    }
-
-    override class func canInit(with request: URLRequest) -> Bool {
-        counter.increment()
-        return false
-    }
-
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
-        request
-    }
-
-    override func startLoading() {}
-    override func stopLoading() {}
-}
-
-private final class NetworkSpyCounter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var storedValue = 0
-    var value: Int { lock.withLock { storedValue } }
-
-    func increment() {
-        lock.withLock { storedValue += 1 }
-    }
-
-    func reset() {
-        lock.withLock { storedValue = 0 }
-    }
 }
 
 private func makeTemporaryModelDirectory() throws -> URL {

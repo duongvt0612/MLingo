@@ -35,7 +35,8 @@ public enum OpenAICompatibleTranslationProviderFactory {
         credentialStore: any ProviderCredentialStoreProtocol,
         httpClient: HTTPClientProtocol = URLSession.shared
     ) throws -> any TranslationProvider {
-        guard selection.profile.apiStyle == .responses
+        guard selection.profile.kind.requiresEndpoint,
+              selection.profile.apiStyle == .responses
             || selection.profile.apiStyle == .chatCompletions
         else {
             throw MLingoError.invalidTranslationConfiguration(

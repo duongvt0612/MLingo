@@ -155,8 +155,7 @@ final class MLingoViewModel {
         let translation = ProviderTranslationEngine(
             profileStore: profileStore,
             providerResolver: { selection in
-                if selection.profile.kind == .builtInMLX,
-                   selection.profile.apiStyle == .native {
+                if selection.profile.kind == .builtInMLX {
                     return builtInMLXProvider
                 }
                 return try OpenAICompatibleTranslationProviderFactory.make(

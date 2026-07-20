@@ -13,6 +13,9 @@ func builtInMLXLocalLLMRespondsAndTranslatesWhenEnabled() async throws {
     }
     let configuredDirectory = try localMLXModelDirectory(envName: "MLINGO_LOCAL_LLM_DIR")
     let modelDirectory = try #require(configuredDirectory)
+    LocalMLXNetworkSpyURLProtocol.reset()
+    URLProtocol.registerClass(LocalMLXNetworkSpyURLProtocol.self)
+    defer { URLProtocol.unregisterClass(LocalMLXNetworkSpyURLProtocol.self) }
     let provider = BuiltInMLXProvider()
 
     let chat = try await provider.respond(
@@ -35,6 +38,7 @@ func builtInMLXLocalLLMRespondsAndTranslatesWhenEnabled() async throws {
     #expect(!subtitle.translated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     #expect(subtitle.start == 12)
     #expect(subtitle.end == 15)
+    #expect(LocalMLXNetworkSpyURLProtocol.requestCount == 0)
 }
 
 @Test
@@ -90,4 +94,39 @@ private func localMLXModelDirectory(envName: String) throws -> URL? {
         throw MLingoError.localModelUnavailable("\(envName) does not point to a directory.")
     }
     return directory.standardizedFileURL
+}
+
+private final class LocalMLXNetworkSpyURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let counter = LocalMLXNetworkSpyCounter()
+    static var requestCount: Int { counter.value }
+
+    static func reset() {
+        counter.reset()
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        counter.increment()
+        return false
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {}
+    override func stopLoading() {}
+}
+
+private final class LocalMLXNetworkSpyCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValue = 0
+    var value: Int { lock.withLock { storedValue } }
+
+    func increment() {
+        lock.withLock { storedValue += 1 }
+    }
+
+    func reset() {
+        lock.withLock { storedValue = 0 }
+    }
 }
