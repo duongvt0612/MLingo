@@ -21,6 +21,7 @@ public actor ModelManager {
     private let installer: ModelInstaller
     private let accounting: ModelStorageAccounting
     private let leases: ModelLeaseRegistry
+    private let residency: (any LocalModelResidencyReporting)?
     private let credentialID: CredentialID
     private let progressThrottle: Duration
 
@@ -48,6 +49,7 @@ public actor ModelManager {
         installer: ModelInstaller? = nil,
         accounting: ModelStorageAccounting? = nil,
         leases: ModelLeaseRegistry = ModelLeaseRegistry(),
+        residency: (any LocalModelResidencyReporting)? = nil,
         credentialID: CredentialID = ModelManager.huggingFaceCredentialID,
         progressThrottle: Duration = .milliseconds(250)
     ) {
@@ -60,6 +62,7 @@ public actor ModelManager {
         self.installer = installer ?? ModelInstaller(layout: layout)
         self.accounting = accounting ?? ModelStorageAccounting(layout: layout)
         self.leases = leases
+        self.residency = residency
         self.credentialID = credentialID
         self.progressThrottle = progressThrottle
     }
@@ -148,11 +151,19 @@ public actor ModelManager {
         }
         guard let receipt = index.receipt(for: id) else { return }
 
+        // A zero lease count is not enough. The MLX runtime keeps weights resident for an idle
+        // interval after the last lease is released, and the files stay mapped for as long as it
+        // does, so it is asked to let go before anything is removed.
+        let directory = layout.installed(receipt.slug)
+        if let residency, await residency.requestEviction(at: directory) == false {
+            throw ModelStoreError(issue: .modelInUse(id))
+        }
+
         // Receipt first: a directory with no receipt is an orphan reconciliation can clear, while
         // a receipt with no directory would hand out a path to nothing.
         index.remove(id)
         try? await receiptStore.save(index)
-        try installer.remove(layout.installed(receipt.slug))
+        try installer.remove(directory)
         update(id, to: .notInstalled)
     }
 

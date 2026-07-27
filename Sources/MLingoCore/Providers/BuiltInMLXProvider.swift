@@ -738,3 +738,47 @@ private enum DirectoryLocalModelFileSizer {
         return total
     }
 }
+
+/// Residency reporting for the Model Manager.
+///
+/// Lives in this file rather than beside the Model Store because it needs the runtime's private
+/// residency tables, and reaching them from elsewhere would mean widening their visibility. It is
+/// purely additive: no existing line changes, no lease semantics move, and the idle-unload policy
+/// stays exactly where it is.
+///
+/// It exists because deleting a model is otherwise unsafe. After the last lease is released the
+/// weights stay resident for `idleUnloadDelay`, and nothing outside this actor could previously
+/// ask for them back.
+extension BuiltInMLXRuntime: LocalModelResidencyReporting {
+    func residentModelDirectories() -> Set<URL> {
+        Set(loadedChatModels.keys)
+            .union(loadedEmbeddingModels.keys)
+            .union(loadingChatModels.keys)
+            .union(loadingEmbeddingModels.keys)
+    }
+
+    func leaseCount(at directory: URL) -> Int {
+        let key = Self.residencyKey(directory)
+        return (loadedChatModels[key]?.activeLeases ?? 0)
+            + (loadedEmbeddingModels[key]?.activeLeases ?? 0)
+    }
+
+    /// Releases an idle model immediately instead of waiting out the idle timer.
+    ///
+    /// Refuses while the model is leased or still loading: cancelling a load in progress would
+    /// surface as an unexplained failure to whoever is waiting on it.
+    func requestEviction(at directory: URL) -> Bool {
+        let key = Self.residencyKey(directory)
+        guard loadingChatModels[key] == nil, loadingEmbeddingModels[key] == nil else { return false }
+        guard leaseCount(at: key) == 0 else { return false }
+
+        unloadChatModelIfIdle(at: key)
+        unloadEmbeddingModelIfIdle(at: key)
+        return loadedChatModels[key] == nil && loadedEmbeddingModels[key] == nil
+    }
+
+    /// Matches how `modelDirectory(from:)` builds the keys of the residency tables.
+    private static func residencyKey(_ directory: URL) -> URL {
+        directory.standardizedFileURL.resolvingSymlinksInPath()
+    }
+}
