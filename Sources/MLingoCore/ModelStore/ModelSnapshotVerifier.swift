@@ -10,6 +10,7 @@ import Foundation
 ///
 /// It deliberately never loads MLX: the runtime owns memory residency, and a verifier that
 /// instantiated a model would hold weights outside that policy.
+///
 /// `@unchecked Sendable`: the only shared state is a `FileManager`, which Apple documents as
 /// thread-safe for the path-based operations used here. Verification hashes multi-gigabyte
 /// weights, so it must be callable off the `ModelManager` actor rather than blocking it.
@@ -159,7 +160,7 @@ public extension ModelQuarantineReason {
         case .unsafeSnapshotEntry: self = .unsafeEntry
         case .snapshotTooLarge: self = .tooLarge
         case .digestMismatch: self = .digestMismatch
-        case .unknownModel, .storageUnavailable, .insufficientDiskSpace, .authenticationRequired,
+        case .unknownModel, .modelNotInstalled, .storageUnavailable, .insufficientDiskSpace, .authenticationRequired,
              .accessGated, .repositoryNotFound, .transportFailure, .installFailed, .modelInUse,
              .refusedOutsideStore:
             return nil

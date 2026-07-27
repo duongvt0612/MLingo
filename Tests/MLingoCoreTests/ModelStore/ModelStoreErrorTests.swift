@@ -6,6 +6,7 @@ import Testing
 /// already guarantees every case maps to something; this list checks the mapping is useful.
 private let sampleIssues: [ModelStoreIssue] = [
     .unknownModel(ModelID("mlx-community/nope")),
+    .modelNotInstalled(ModelID("mlx-community/whisper-base-mlx")),
     .storageUnavailable,
     .insufficientDiskSpace(requiredBytes: 900, availableBytes: 100),
     .authenticationRequired,

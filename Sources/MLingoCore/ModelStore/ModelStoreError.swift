@@ -7,6 +7,7 @@ import Foundation
 /// is given to a last path component as a second line of defence.
 public enum ModelStoreIssue: Equatable, Sendable {
     case unknownModel(ModelID)
+    case modelNotInstalled(ModelID)
     case storageUnavailable
     case insufficientDiskSpace(requiredBytes: UInt64, availableBytes: UInt64)
     case authenticationRequired
@@ -43,7 +44,7 @@ public enum ModelStoreRecoveryAction: Equatable, Sendable {
         case .addHuggingFaceToken: "Add Hugging Face Token"
         case .acceptRepositoryLicence: "Open Model Page"
         case .stopActiveSession: "Stop Session"
-        case .reinstallModel: "Download Again"
+        case .reinstallModel: "Download"
         case .checkStorageAccess: "Check Storage"
         case .reportBug: "Report a Problem"
         }
@@ -74,7 +75,7 @@ public struct ModelStoreError: Error, Equatable, Sendable {
             .reportBug
         case .transportFailure:
             .retryDownload
-        case .missingRequiredFile, .emptyFile, .malformedManifest, .digestMismatch:
+        case .missingRequiredFile, .emptyFile, .malformedManifest, .digestMismatch, .modelNotInstalled:
             .reinstallModel
         case .unsafeSnapshotEntry, .snapshotTooLarge, .refusedOutsideStore:
             .reportBug
@@ -91,6 +92,8 @@ extension ModelStoreError: LocalizedError {
         switch issue {
         case .unknownModel(let id):
             "\(id.rawValue) is not in the model catalog."
+        case .modelNotInstalled(let id):
+            "\(id.rawValue) has not been downloaded yet."
         case .storageUnavailable:
             "MLingo could not open its model storage folder."
         case .insufficientDiskSpace(let required, let available):

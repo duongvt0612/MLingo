@@ -76,17 +76,17 @@ final class FakeModelSnapshotDownloader: ModelSnapshotDownloading, @unchecked Se
             throw error
 
         case .failAfterWriting(let files, let error):
-            try write(files.map { ($0, Data(repeating: 0x41, count: 32)) }, to: destination, request: request)
+            try write(files.map { ($0, Self.plausibleContent(for: $0)) }, to: destination, request: request)
             throw error
 
         case .success(let bytesPerFile):
-            let payload = request.files.map { ($0, Data(repeating: 0x41, count: bytesPerFile)) }
+            let payload = request.files.map { ($0, Self.plausibleContent(for: $0, bytes: bytesPerFile)) }
             try await emitProgress(payload, onProgress: onProgress)
             try write(payload, to: destination, request: request)
             return destination
 
         case .partial(let files, let bytesPerFile):
-            let payload = files.map { ($0, Data(repeating: 0x41, count: bytesPerFile)) }
+            let payload = files.map { ($0, Self.plausibleContent(for: $0, bytes: bytesPerFile)) }
             try await emitProgress(payload, onProgress: onProgress)
             try write(payload, to: destination, request: request)
             return destination
@@ -96,6 +96,20 @@ final class FakeModelSnapshotDownloader: ModelSnapshotDownloading, @unchecked Se
             try await emitProgress(payload, onProgress: onProgress)
             try write(payload, to: destination, request: request)
             return destination
+        }
+    }
+
+    /// JSON where a real repository ships JSON, bytes elsewhere.
+    ///
+    /// This matters more than it looks: a file that completed once is not fetched again, so if
+    /// the fake wrote junk into `config.json` the first time, every later attempt would inherit
+    /// it and fail verification for the wrong reason.
+    private static func plausibleContent(for name: String, bytes: Int = 32) -> Data {
+        switch name {
+        case "config.json": Data(#"{"model_type":"test"}"#.utf8)
+        case "tokenizer.json": Data(#"{"version":"1"}"#.utf8)
+        case _ where name.hasSuffix(".json"): Data("{}".utf8)
+        default: Data(repeating: 0x41, count: bytes)
         }
     }
 
