@@ -19,7 +19,8 @@ private let sampleIssues: [ModelStoreIssue] = [
     .snapshotTooLarge(actualBytes: 4_000, allowedBytes: 1_000),
     .digestMismatch("model.safetensors"),
     .installFailed,
-    .modelInUse(ModelID("mlx-community/whisper-base-mlx"))
+    .modelInUse(ModelID("mlx-community/whisper-base-mlx")),
+    .refusedOutsideStore("precious")
 ]
 
 @Test
@@ -70,7 +71,8 @@ func modelStoreIssuesCarryFileNamesRatherThanPaths() {
         .emptyFile("/tmp/model.safetensors"),
         .malformedManifest("nested/config.json"),
         .unsafeSnapshotEntry("../escape"),
-        .digestMismatch("/Users/someone/model.safetensors")
+        .digestMismatch("/Users/someone/model.safetensors"),
+        .refusedOutsideStore("/Users/someone/Documents")
     ]
     for issue in pathBearing {
         let description = ModelStoreError(issue: issue).errorDescription ?? ""

@@ -21,6 +21,8 @@ public enum ModelStoreIssue: Equatable, Sendable {
     case digestMismatch(String)
     case installFailed
     case modelInUse(ModelID)
+    /// A destructive operation was aimed outside the model store. Always a bug, never input.
+    case refusedOutsideStore(String)
 }
 
 /// The single next step a user can take. Settings renders one control per action.
@@ -74,7 +76,7 @@ public struct ModelStoreError: Error, Equatable, Sendable {
             .retryDownload
         case .missingRequiredFile, .emptyFile, .malformedManifest, .digestMismatch:
             .reinstallModel
-        case .unsafeSnapshotEntry, .snapshotTooLarge:
+        case .unsafeSnapshotEntry, .snapshotTooLarge, .refusedOutsideStore:
             .reportBug
         case .installFailed:
             .retryDownload
@@ -123,6 +125,8 @@ extension ModelStoreError: LocalizedError {
             "The model could not be moved into place."
         case .modelInUse(let id):
             "\(id.rawValue) is in use by the current session."
+        case .refusedOutsideStore(let name):
+            "MLingo refused to modify \(Self.fileName(name)) because it is outside model storage."
         }
     }
 
