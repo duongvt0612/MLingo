@@ -9,4 +9,5 @@ public enum MLingoLogger {
     public static let overlay = Logger(subsystem: subsystem, category: "overlay")
     public static let settings = Logger(subsystem: subsystem, category: "settings")
     public static let pipeline = Logger(subsystem: subsystem, category: "pipeline")
+    public static let models = Logger(subsystem: subsystem, category: "models")
 }

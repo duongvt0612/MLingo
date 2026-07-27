@@ -4,6 +4,7 @@ public enum PersistenceBackend: String, Sendable {
     case keychain = "Keychain"
     case userDefaults = "UserDefaults"
     case swiftDataDeferred = "SwiftData deferred"
+    case fileSystem = "File system"
 }
 
 public struct PersistencePolicy: Equatable, Sendable {
@@ -37,9 +38,19 @@ public enum MLingoPersistencePolicy {
         note: "Reserve SwiftData for future history, vocabulary, or larger user-owned datasets."
     )
 
+    public static let modelAssets = PersistencePolicy(
+        name: "Downloaded model assets",
+        backend: .fileSystem,
+        note: """
+        Weights and their install receipts live together under Application Support so a \
+        receipt can never describe a folder that moved or was reset independently.
+        """
+    )
+
     public static let all: [PersistencePolicy] = [
         apiKey,
         preferences,
-        futureUserData
+        futureUserData,
+        modelAssets
     ]
 }
