@@ -2,10 +2,9 @@
 
 **Design:** [Platform design](../../specs/2026-07-15-mlingo-platform-design.md)
 
-**Status:** Milestones 01-02 and 05-06 complete; Milestone 03 implementation complete with its
+**Status:** Milestones 01-02, 05-07 complete; Milestone 03 implementation complete with its
 loopback live proof deferred by owner waiver; Milestone 04 code-complete with manual
-accessibility acceptance pending; Milestone 07 code-complete with real installed-model
-acceptance pending.
+accessibility acceptance pending. Milestone 08 is split into 08a (headless core) and 08b (UI).
 **Execution rule:** Complete and verify one milestone before starting the next. The owner
 has explicitly waived the external loopback proof for Milestone 03 until Ollama or LM
 Studio is installed. The owner has also explicitly allowed Milestones 05 and 06 to start
@@ -35,7 +34,8 @@ is treated as passed.
 | 05 | [Typed Event Hub](05-typed-event-hub.md) | Ordering, overflow, isolation, and durable backpressure proven |
 | 06 | [Runtime Migration](06-runtime-migration.md) | New orchestrator reaches feature parity and old pipeline is removed |
 | 07 | [Built-in MLX Runtime](07-built-in-mlx-runtime.md) | Installed local model translates and chats offline |
-| 08 | [Unified Model Manager](08-unified-model-manager.md) | Clean-cache lifecycle and failure recovery pass |
+| 08a | [Model Manager Core](08a-model-manager-core.md) | Clean-store lifecycle and failure recovery pass, entirely offline |
+| 08b | [Models Catalog UI](08b-models-catalog-ui.md) | Native, accessible model management with progress and recovery |
 | 09 | [Translation Quality](09-translation-quality.md) | Atomic, ordered translation meets recorded quality and latency gates |
 | 10 | [Opt-in Session Recording](10-session-recording.md) | Only opted-in sessions persist; export contains no secrets/audio |
 | 11 | [Knowledge Engine](11-knowledge-engine.md) | Offline semantic search and vector-space isolation pass |
@@ -71,4 +71,16 @@ Run a native Xcode Release build whenever a dependency, resource, entitlement, s
 - 2026-07-16: Milestone 05 complete. Immutable typed envelopes and four initial facts, per-session sequence and trace metadata, exact type/session routing, bounded realtime drop-oldest/coalescing, lossless durable backpressure, typed metrics, handler-failure isolation, idempotent cancellation, and shutdown race handling are implemented in standalone `MLingoCore`. Focused tests pass (2 EventEnvelope, 14 TypedEventHub, 1 EventFacts); the full suite passes 285 tests, Release build passes with the classified upstream MLXAudioVAD README warning, and whitespace plus unchanged-`SubtitlePipeline.swift` gates pass. M04's manual acceptance remains pending under the recorded owner waiver.
 - 2026-07-16: By explicit owner waiver, Milestone 06 started while Milestone 04 remains code-complete/manual-pending; no M04 manual item is represented as passed. The clean starting point is M05 merge-equivalent commit `e0b6a37`; the audited baseline remains 285 tests with passing Release and whitespace gates. GitNexus reports `UNKNOWN` impact because its parser skips Swift, so M06 uses direct source-reference auditing and parity contracts for the high-risk runtime cutover.
 - 2026-07-16: Milestone 06 complete. `MLingoViewModel` now depends on `SessionRuntimeProtocol` and live composition uses the event-driven `SessionOrchestrator`. Session-scoped lifecycle/transcript/translation facts preserve ordering and Whisper trace metadata; raw audio and diagnostics remain direct; actor-owned translation retains context-two, dedupe, bounded drop-oldest, permanent-error pause and stale-result rejection; Sound Test remains isolated. The old runtime types and obsolete tests are removed. Focused runtime gates and the offline scripted-provider end-to-end fixture pass; the full suite passes 297 tests; SwiftPM Release, native arm64 archive/signature, whitespace and legacy-symbol cleanup gates pass. GitNexus was refreshed but still skips Swift (120 files), so direct diff/reference auditing remains the authoritative blast-radius evidence. M04 manual accessibility acceptance remains pending under the owner waiver.
+- 2026-07-28: Milestone 07 complete. The real installed-model gate ran against
+  `mlx-community/Qwen3-0.6B-4bit` and `intfloat/multilingual-e5-small`: offline chat and
+  translation passed with the network spy recording zero requests, and successive embedding
+  calls returned matching dimensions with L2 norms within 0.001. Running the opt-in suite
+  under SwiftPM first required copying the native Release `default.metallib` beside the test
+  binary, because SwiftPM does not package mlx-swift Metal resources; the workaround is
+  recorded in the milestone file and lives entirely inside `.build`.
+- 2026-07-28: Milestone 08 split into 08a (headless Model Manager core, `MLingoCore` only)
+  and 08b (Models catalog UI), with a design recorded at
+  `docs/superpowers/specs/2026-07-28-model-manager-design.md`. Byte-range resume is recorded
+  as a deliberate non-goal: `resumeDownloadFile` has no call site in swift-huggingface 0.9.0,
+  so cancellation restarts a file from zero while completed files still resume per file.
 - 2026-07-21: Milestone 07 is code-complete after a deep comparison with `dev`. Review fixes enforce one shared MLX residency policy, per-request chat sessions, cancellable coalesced loads, built-in-kind local-only routing, host-level available-memory preflight, logical model sizing, and strict embedding-shape validation. Focused suites pass 12 BuiltInMLX and 2 HTTP-factory tests; the full suite passes 310 tests; SwiftPM Release and the native arm64 archive/signature/export gate pass. The real installed-model offline, deterministic-embedding, and no-network proof remains unchecked because its opt-in model directories were unavailable. GitNexus was refreshed but still cannot index Swift symbols, so direct source/reference and upstream-package audits are authoritative.
