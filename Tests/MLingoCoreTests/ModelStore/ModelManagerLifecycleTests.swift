@@ -455,8 +455,11 @@ func progressUpdatesAreMonotonicAndStopAtTheFinalState() async throws {
     }
     defer { observer.cancel() }
 
-    await harness.manager.install(modelID)
+    // Observed while the download is in flight rather than read back afterwards, so the assertion
+    // does not depend on progress states still sitting in the stream's buffer once it has finished.
+    let installing = Task { await harness.manager.install(modelID) }
     try await eventually { await recorder.count > 0 }
+    await installing.value
 
     #expect(await recorder.isMonotonic)
     #expect(await harness.manager.state(for: modelID) == .installed)

@@ -137,11 +137,7 @@ public actor ModelManager {
 
     public func cancel(_ id: ModelID) {
         activeTasks[id]?.cancel()
-        if let position = waiting.firstIndex(of: id) {
-            waiting.remove(at: position)
-            waiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
-            publishQueuePositions()
-        }
+        abandonQueuedSlot(id)
     }
 
     public func delete(_ id: ModelID) async throws {
@@ -436,9 +432,28 @@ public actor ModelManager {
         }
         waiting.append(id)
         publishQueuePositions()
-        try await withCheckedThrowingContinuation { continuation in
-            waiters[id] = continuation
+        // `cancel(_:)` resumes a queued waiter itself, but it is not the only way this task can be
+        // cancelled. Without a handler, cancellation from anywhere else leaves the continuation
+        // suspended forever and the slot never frees.
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                guard !Task.isCancelled else {
+                    waiting.removeAll { $0 == id }
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                waiters[id] = continuation
+            }
+        } onCancel: {
+            Task { await self.abandonQueuedSlot(id) }
         }
+    }
+
+    private func abandonQueuedSlot(_ id: ModelID) {
+        guard let position = waiting.firstIndex(of: id) else { return }
+        waiting.remove(at: position)
+        waiters.removeValue(forKey: id)?.resume(throwing: CancellationError())
+        publishQueuePositions()
     }
 
     private func releaseSlot() {

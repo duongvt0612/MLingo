@@ -4,7 +4,9 @@
 
 **Design:** [Model Manager design](../../specs/2026-07-28-model-manager-design.md)
 
-**Scope:** `Sources/MLingoCore` only. No UI, no `Sources/MLingoApp` change, no `MLingo.xcodeproj` change.
+**Scope:** production code is confined to `Sources/MLingoCore` — no UI, no `Sources/MLingoApp`
+change, and therefore no `MLingo.xcodeproj` change. Tests and documentation change as the tasks
+and acceptance criteria below require.
 
 ## Tasks
 
@@ -35,8 +37,8 @@
 
 ## Recorded 2026-07-28
 
-- `swift test --no-parallel`: **432 tests pass**, up from the 310 baseline. Three consecutive
-  clean runs and one run under saturating CPU load all passed.
+- `swift test --no-parallel`: **433 tests pass**, up from the 310 baseline. Repeated clean runs
+  and one run under saturating CPU load all passed.
 - `swift build -c release`: passes with the one classified upstream MLXAudioVAD README warning.
 - `git diff --check`: clean.
 - Offline proof: `theDefaultModelStoreSuiteMakesNoNetworkRequest` runs install, snapshot, lease,

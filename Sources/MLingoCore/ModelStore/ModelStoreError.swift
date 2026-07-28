@@ -19,6 +19,7 @@ public enum ModelStoreIssue: Equatable, Sendable {
     case malformedManifest(String)
     case unsafeSnapshotEntry(String)
     case snapshotTooLarge(actualBytes: UInt64, allowedBytes: UInt64)
+    case tooManyFiles(actual: Int, allowed: Int)
     case digestMismatch(String)
     case installFailed
     case modelInUse(ModelID)
@@ -77,7 +78,7 @@ public struct ModelStoreError: Error, Equatable, Sendable {
             .retryDownload
         case .missingRequiredFile, .emptyFile, .malformedManifest, .digestMismatch, .modelNotInstalled:
             .reinstallModel
-        case .unsafeSnapshotEntry, .snapshotTooLarge, .refusedOutsideStore:
+        case .unsafeSnapshotEntry, .snapshotTooLarge, .tooManyFiles, .refusedOutsideStore:
             .reportBug
         case .installFailed:
             .retryDownload
@@ -118,10 +119,17 @@ extension ModelStoreError: LocalizedError {
         case .unsafeSnapshotEntry(let name):
             "The download contains an unsafe entry named \(Self.fileName(name))."
         case .snapshotTooLarge(let actual, let allowed):
-            """
-            The download is \(Self.formatted(actual)), well beyond the expected \
-            \(Self.formatted(allowed)).
-            """
+            // A quarantine reason restored from disk carries no figures, because the receipt keeps
+            // only the reason. Reporting "0 bytes, beyond the expected 0 bytes" would be worse
+            // than saying less.
+            actual == 0 && allowed == 0
+                ? "The download was larger than expected."
+                : """
+                The download is \(Self.formatted(actual)), well beyond the expected \
+                \(Self.formatted(allowed)).
+                """
+        case .tooManyFiles(let actual, let allowed):
+            "The download contains \(actual) files, far more than the \(allowed) expected."
         case .digestMismatch(let name):
             "\(Self.fileName(name)) does not match its expected checksum."
         case .installFailed:

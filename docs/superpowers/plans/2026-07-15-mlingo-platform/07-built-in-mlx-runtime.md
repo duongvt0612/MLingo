@@ -58,8 +58,10 @@ Both opt-in local suites passed against installed models:
 - `builtInMLXLocalLLMRespondsAndTranslatesWhenEnabled` — 7.624s. Chat and translation both
   produced non-empty output, subtitle timing was preserved, and the registered
   `URLProtocol` spy recorded `requestCount == 0`, proving inference made no network request.
-- `builtInMLXLocalEmbeddingModelEmbedsWhenEnabled` — 2.661s. Two successive calls returned
-  matching vector dimensions and every vector was L2-normalised to within 0.001.
+- `builtInMLXLocalEmbeddingModelEmbedsWhenEnabled` — 1.425s. Two successive calls returned
+  matching vector dimensions, every vector was L2-normalised to within 0.001, and each element
+  matched its counterpart from the other call to within 1e-5. The element-wise comparison is what
+  makes the determinism claim real: shapes and norms alone would still agree if the values drifted.
 
 Models used: `mlx-community/Qwen3-0.6B-4bit` at commit
 `73e3e38d981303bc594367cd910ea6eb48349da8` and `intfloat/multilingual-e5-small` at commit

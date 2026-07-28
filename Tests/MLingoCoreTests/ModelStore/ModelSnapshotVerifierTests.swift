@@ -159,12 +159,13 @@ func verifierRejectsTooManyFiles() throws {
         try writeFile("extra-\(index).bin", Data(repeating: 0, count: 1), in: temporary.url)
     }
 
-    #expect {
-        try ModelSnapshotVerifier().verify(temporary.url, against: try makeEntry())
-    } throws: { error in
-        if case .snapshotTooLarge = (error as? ModelStoreError)?.issue { return true }
-        return false
-    }
+    // A file count is not a byte count, so it gets its own issue rather than borrowing the size
+    // one and rendering "203 bytes, beyond the expected 128 bytes".
+    expectIssue(
+        .tooManyFiles(actual: 203, allowed: ModelSnapshotVerifier.maximumFileCount),
+        verifying: temporary.url,
+        against: try makeEntry()
+    )
 }
 
 @Test
@@ -231,6 +232,7 @@ func modelQuarantineReasonCoversEveryVerificationIssue() {
     #expect(ModelQuarantineReason(issue: .malformedManifest("a")) == .malformedManifest)
     #expect(ModelQuarantineReason(issue: .unsafeSnapshotEntry("a")) == .unsafeEntry)
     #expect(ModelQuarantineReason(issue: .snapshotTooLarge(actualBytes: 2, allowedBytes: 1)) == .tooLarge)
+    #expect(ModelQuarantineReason(issue: .tooManyFiles(actual: 200, allowed: 128)) == .tooLarge)
     #expect(ModelQuarantineReason(issue: .digestMismatch("a")) == .digestMismatch)
     // Transport and disk failures are retried, never quarantined.
     #expect(ModelQuarantineReason(issue: .transportFailure) == nil)

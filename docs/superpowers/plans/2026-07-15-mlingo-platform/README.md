@@ -74,7 +74,8 @@ Run a native Xcode Release build whenever a dependency, resource, entitlement, s
 - 2026-07-28: Milestone 07 complete. The real installed-model gate ran against
   `mlx-community/Qwen3-0.6B-4bit` and `intfloat/multilingual-e5-small`: offline chat and
   translation passed with the network spy recording zero requests, and successive embedding
-  calls returned matching dimensions with L2 norms within 0.001. Running the opt-in suite
+  calls agreed element by element to within 1e-5 as well as in dimension and L2 norm. Running
+  the opt-in suite
   under SwiftPM first required copying the native Release `default.metallib` beside the test
   binary, because SwiftPM does not package mlx-swift Metal resources; the workaround is
   recorded in the milestone file and lives entirely inside `.build`.

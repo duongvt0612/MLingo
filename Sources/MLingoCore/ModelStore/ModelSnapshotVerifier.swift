@@ -33,10 +33,7 @@ public struct ModelSnapshotVerifier: @unchecked Sendable {
 
         guard names.count <= Self.maximumFileCount else {
             throw ModelStoreError(
-                issue: .snapshotTooLarge(
-                    actualBytes: UInt64(names.count),
-                    allowedBytes: UInt64(Self.maximumFileCount)
-                )
+                issue: .tooManyFiles(actual: names.count, allowed: Self.maximumFileCount)
             )
         }
 
@@ -158,7 +155,7 @@ public extension ModelQuarantineReason {
         case .emptyFile: self = .emptyFile
         case .malformedManifest: self = .malformedManifest
         case .unsafeSnapshotEntry: self = .unsafeEntry
-        case .snapshotTooLarge: self = .tooLarge
+        case .snapshotTooLarge, .tooManyFiles: self = .tooLarge
         case .digestMismatch: self = .digestMismatch
         case .unknownModel, .modelNotInstalled, .storageUnavailable, .insufficientDiskSpace, .authenticationRequired,
              .accessGated, .repositoryNotFound, .transportFailure, .installFailed, .modelInUse,

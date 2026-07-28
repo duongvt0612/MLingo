@@ -131,23 +131,35 @@ func installerLeavesTheExistingInstallIntactWhenReplacementFails() throws {
     let staging = layout.staging(slug, run: UUID())
     _ = try write("config.json", "new", in: staging)
 
-    try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: layout.installedRoot.path)
-    defer {
-        try? FileManager.default.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: layout.installedRoot.path
-        )
-    }
+    // Injected rather than provoked with a read-only directory: root ignores POSIX permissions, so
+    // a chmod-based setup would silently stop testing anything in a container that runs as root.
+    let installer = ModelInstaller(layout: layout, fileManager: FailingReplacementFileManager())
 
     #expect {
-        try ModelInstaller(layout: layout).install(staging: staging, into: layout.installed(slug))
+        try installer.install(staging: staging, into: layout.installed(slug))
     } throws: { error in
         (error as? ModelStoreError)?.issue == .installFailed
     }
 
-    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: layout.installedRoot.path)
     let contents = try String(contentsOf: layout.installed(slug).appending(path: "config.json"), encoding: .utf8)
     #expect(contents == "old", "a failed install must not leave the model half replaced")
+    #expect(FileManager.default.fileExists(atPath: staging.appending(path: "config.json").path))
+}
+
+/// Fails only the atomic replacement, leaving every other file operation real.
+///
+/// `replaceItemAt` is a Swift extension and cannot be overridden, so the Objective-C method it
+/// wraps is the injection point.
+private final class FailingReplacementFileManager: FileManager, @unchecked Sendable {
+    override func replaceItem(
+        at originalItemURL: URL,
+        withItemAt newItemURL: URL,
+        backupItemName: String?,
+        options: FileManager.ItemReplacementOptions = [],
+        resultingItemURL: AutoreleasingUnsafeMutablePointer<NSURL?>?
+    ) throws {
+        throw CocoaError(.fileWriteNoPermission)
+    }
 }
 
 @Test

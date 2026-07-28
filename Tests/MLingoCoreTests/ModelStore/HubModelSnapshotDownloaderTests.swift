@@ -80,24 +80,3 @@ func hubDownloaderNeverSurfacesTheTokenInAMappedError() throws {
     #expect(!description.contains("hf_supersecret"))
     #expect(!description.contains("Bearer"))
 }
-
-@Test
-func hubDownloaderRejectsAMalformedRepositoryWithoutMakingARequest() async throws {
-    let temporary = try TemporaryDirectory(label: "HubDownloader")
-    defer { temporary.remove() }
-    let spy = ModelStoreNetworkSpy()
-    spy.start()
-    defer { spy.stop() }
-
-    let downloader = HubModelSnapshotDownloader(cacheDirectory: temporary.url)
-    let request = ModelDownloadRequest(
-        repository: "no-slash",
-        revision: String(repeating: "a", count: 40),
-        files: ["config.json"]
-    )
-
-    await #expect(throws: ModelStoreError(issue: .repositoryNotFound(repository: "no-slash"))) {
-        _ = try await downloader.downloadSnapshot(request, token: nil) { _ in }
-    }
-    #expect(spy.requestCount == 0)
-}

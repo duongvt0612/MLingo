@@ -136,6 +136,9 @@ actor MLXAudioWhisperBackend: WhisperInferenceBackend {
 public actor MLXWhisperEngine: WhisperEngineProtocol {
     private let backend: any WhisperInferenceBackend
     private var loadedModelName: String?
+    /// Transcriptions in flight. `transcribe` suspends while the backend runs, so an eviction
+    /// request can interleave with it; this is what lets one refuse the other.
+    private var activeTranscriptions = 0
 
     public init() {
         backend = MLXAudioWhisperBackend()
@@ -183,6 +186,9 @@ public actor MLXWhisperEngine: WhisperEngineProtocol {
 
         guard !chunk.samples.isEmpty else { return nil }
 
+        activeTranscriptions += 1
+        defer { activeTranscriptions -= 1 }
+
         do {
             let text = try await backend.transcribe(
                 samples: chunk.samples,
@@ -205,25 +211,37 @@ public actor MLXWhisperEngine: WhisperEngineProtocol {
 
 /// Residency reporting for the Model Manager.
 ///
-/// The engine has no lease of its own: it holds one model for whatever session is running, and
-/// cannot tell whether that session is mid-sentence. `leaseCount` therefore always reports zero
-/// and protection comes from the lease the runtime takes through `ModelManager` for the length of
-/// a session. Eviction simply drops the weights so the files can be removed.
+/// A loaded model is not by itself a reason to refuse deletion — the engine keeps one loaded for
+/// the whole of a session, and an idle session should not block the user from freeing space. What
+/// must be refused is eviction while audio is actually being transcribed, because dropping the
+/// weights mid-window fails the request in progress. That is what `activeTranscriptions` counts.
+///
+/// Deleting between windows remains possible, and `ModelManager` is expected to hold its own lease
+/// for the length of a session once composition wires it in.
 extension MLXWhisperEngine: LocalModelResidencyReporting {
     public func residentModelDirectories() async -> Set<URL> {
         guard let directory = await backend.loadedModelDirectory() else { return [] }
         return [directory]
     }
 
-    public func leaseCount(at directory: URL) async -> Int { 0 }
+    public func leaseCount(at directory: URL) async -> Int {
+        await holdsModel(at: directory) ? activeTranscriptions : 0
+    }
 
     public func requestEviction(at directory: URL) async -> Bool {
-        let normalized = directory.standardizedFileURL.resolvingSymlinksInPath()
-        guard await backend.loadedModelDirectory()?.standardizedFileURL.resolvingSymlinksInPath() == normalized else {
-            return true
-        }
+        guard await holdsModel(at: directory) else { return true }
+        guard activeTranscriptions == 0 else { return false }
+
         await backend.unload()
         loadedModelName = nil
         return true
+    }
+
+    private func holdsModel(at directory: URL) async -> Bool {
+        let normalized = directory.standardizedFileURL.resolvingSymlinksInPath()
+        let loaded = await backend.loadedModelDirectory()?
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        return loaded == normalized
     }
 }

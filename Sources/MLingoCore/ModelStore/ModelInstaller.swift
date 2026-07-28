@@ -101,10 +101,23 @@ public struct ModelInstaller: @unchecked Sendable {
         do {
             try fileManager.createDirectory(at: layout.stagingRoot, withIntermediateDirectories: true)
             try fileManager.moveItem(at: url, to: scratch)
+        } catch {
+            throw ModelStoreError(issue: .installFailed)
+        }
+
+        // The move is what the caller asked for: the model is gone from its published location and
+        // the receipt is already retired. Failing to free the bytes afterwards leaves recoverable
+        // scratch that reconciliation clears on the next launch, so it must not be reported as a
+        // failed deletion and make the caller retry an operation that already succeeded.
+        do {
             try fileManager.removeItem(at: scratch)
         } catch {
-            try? fileManager.removeItem(at: scratch)
-            throw ModelStoreError(issue: .installFailed)
+            MLingoLogger.models.warning(
+                """
+                Removed model still occupies scratch space, code \
+                \((error as NSError).code, privacy: .public)
+                """
+            )
         }
     }
 

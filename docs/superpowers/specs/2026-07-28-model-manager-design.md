@@ -59,13 +59,13 @@ Built-in MLX profiles continue to store an absolute path in `CapabilitySelection
 
 ## Progress
 
-Model Manager exposes `snapshot()` and an `AsyncStream` with `bufferingNewest(1)`, which coalesces, applies no backpressure, and replays the latest value to late subscribers. `TypedEventHub` is deliberately not used: it requires a session identifier, never replays history, suspends the publisher when a durable subscription fills, and is instantiated per `SessionOrchestrator`.
+Model Manager exposes `snapshot()` and an `AsyncStream` with `bufferingNewest(64)`, which applies no backpressure, replays the latest value to late subscribers, and drops the oldest states rather than the newest under pressure. The bound is large enough to follow a full lifecycle and small enough that a stalled consumer cannot grow without limit. `TypedEventHub` is deliberately not used: it requires a session identifier, never replays history, suspends the publisher when a durable subscription fills, and is instantiated per `SessionOrchestrator`.
 
 Upstream delivers progress on the main actor and polls every 100 ms. Updates are throttled, guarded to be monotonic, and tagged with a run identifier so a late callback cannot revive a finished download.
 
 ## Testing
 
-The default suite is fully offline and proves it: a `URLProtocol` spy asserts zero requests across the whole happy path. Real downloads run only under `MLINGO_RUN_MODEL_DOWNLOAD_TESTS=1`, and a missing companion variable throws rather than skipping silently.
+The default suite is offline, and a `URLProtocol` spy records zero requests across the whole happy path. The spy sees traffic from `URLSession` on the default configuration, which is the only route this code takes to the network; a session with its own `protocolClasses`, or a raw socket, would escape it. Every test that installs the spy lives in one serialized suite, because registration and counting are process-wide. Real downloads run only under `MLINGO_RUN_MODEL_DOWNLOAD_TESTS=1`, and a missing companion variable throws rather than skipping silently.
 
 `ModelManager` takes every dependency through its initializer. A shared instance exists only where the app is composed, because tests that touch it would write to the real Application Support directory and leak state between runs — `--no-parallel` prevents interference within a run, not across runs.
 

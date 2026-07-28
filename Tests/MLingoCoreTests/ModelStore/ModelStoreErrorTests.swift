@@ -18,6 +18,7 @@ private let sampleIssues: [ModelStoreIssue] = [
     .malformedManifest("config.json"),
     .unsafeSnapshotEntry("evil"),
     .snapshotTooLarge(actualBytes: 4_000, allowedBytes: 1_000),
+    .tooManyFiles(actual: 200, allowed: 128),
     .digestMismatch("model.safetensors"),
     .installFailed,
     .modelInUse(ModelID("mlx-community/whisper-base-mlx")),
