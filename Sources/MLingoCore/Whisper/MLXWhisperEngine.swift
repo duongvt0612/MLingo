@@ -232,8 +232,10 @@ extension MLXWhisperEngine: LocalModelResidencyReporting {
         guard await holdsModel(at: directory) else { return true }
         guard activeTranscriptions == 0 else { return false }
 
-        await backend.unload()
+        // Clear state synchronously before the await so a `transcribe()` call that interleaves
+        // during `unload()` fails fast instead of racing the unload.
         loadedModelName = nil
+        await backend.unload()
         return true
     }
 
