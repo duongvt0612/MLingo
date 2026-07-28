@@ -78,6 +78,19 @@ Run a native Xcode Release build whenever a dependency, resource, entitlement, s
   under SwiftPM first required copying the native Release `default.metallib` beside the test
   binary, because SwiftPM does not package mlx-swift Metal resources; the workaround is
   recorded in the milestone file and lives entirely inside `.build`.
+- 2026-07-28: Milestone 08a complete. The headless Model Manager lands entirely in `MLingoCore`:
+  slug-typed storage layout, a three-entry catalog pinned to commit SHAs, a file-backed receipt
+  index, lease registry, download seam, manifest and digest verification, hardlink install, disk
+  accounting, and the lifecycle actor with a single-slot queue, cancellation, reconciliation, and
+  a coalescing state stream. Keychain-backed Hugging Face tokens are read fresh per download and
+  never reach the receipt index or the environment. Deletion asks the MLX runtime to evict first,
+  through an additive conformance that changed no existing line of the Milestone 07 runtime, whose
+  twelve tests still pass. Whisper gained a directory-resolver seam that leaves
+  `WhisperEngineProtocol` and all eleven of its implementations untouched and falls back to the
+  previous download path, so an existing installation keeps working offline. The suite passes 432
+  tests, up from 310; Release build and whitespace gates pass; the default suite is proven offline
+  by a `URLProtocol` spy; and the opt-in real-download gate completed the whisper-base cycle in
+  37.5s with storage accounting confirming the model is stored once rather than twice.
 - 2026-07-28: Milestone 08 split into 08a (headless Model Manager core, `MLingoCore` only)
   and 08b (Models catalog UI), with a design recorded at
   `docs/superpowers/specs/2026-07-28-model-manager-design.md`. Byte-range resume is recorded
