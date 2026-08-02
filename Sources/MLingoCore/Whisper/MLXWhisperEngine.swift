@@ -7,22 +7,61 @@ import MLXAudioSTT
 protocol WhisperInferenceBackend: Sendable {
     func loadModel(named modelName: String) async throws
     func transcribe(samples: [Float], language: String) async throws -> String
+    /// Drops the loaded weights. Model Manager asks before deleting a model's files, because
+    /// removing them while they are still mapped fails later and somewhere else.
+    func unload() async
+    /// The installed directory currently loaded, when the model came from the model store.
+    func loadedModelDirectory() async -> URL?
+}
+
+/// Where a Whisper model is loaded from.
+enum WhisperModelSource: Equatable, Sendable {
+    /// A directory the Model Manager installed and verified. Loads without touching the network.
+    case installedDirectory(URL)
+    /// The repository identifier, resolved and downloaded by mlx-audio as before.
+    case pretrained(String)
 }
 
 actor MLXAudioWhisperBackend: WhisperInferenceBackend {
     private static let whisperSampleRate = 16_000
     private let isMetalLibraryAvailable: @Sendable () -> Bool
     private let cache: HubCache
+    private let modelDirectoryResolver: (any ModelDirectoryResolving)?
     private var model: WhisperModel?
+    private var loadedDirectory: URL?
 
+    /// `modelDirectoryResolver` defaults to `nil` so every existing call site keeps the previous
+    /// behaviour untouched: without it the backend downloads through mlx-audio exactly as before,
+    /// which is what keeps an installation that predates the model store working offline.
     init(
         cacheDirectory: URL? = nil,
+        modelDirectoryResolver: (any ModelDirectoryResolving)? = nil,
         isMetalLibraryAvailable: @escaping @Sendable () -> Bool = {
             MLXMetalLibraryAvailability.isAvailable()
         }
     ) {
         cache = cacheDirectory.map(HubCache.init(cacheDirectory:)) ?? .default
+        self.modelDirectoryResolver = modelDirectoryResolver
         self.isMetalLibraryAvailable = isMetalLibraryAvailable
+    }
+
+    /// Prefers an installed model and falls back to downloading, so the choice is a pure function
+    /// of the resolver's answer and can be tested without MLX.
+    static func resolveSource(
+        for modelName: String,
+        using resolver: (any ModelDirectoryResolving)?
+    ) async -> WhisperModelSource {
+        let repository = resolvedModelName(for: modelName)
+        guard let resolver else { return .pretrained(repository) }
+        // Both the catalog identifier and the alias it resolves to are accepted, because settings
+        // stores the former while mlx-audio speaks the latter.
+        if let directory = await resolver.installedDirectory(forModelID: modelName) {
+            return .installedDirectory(directory)
+        }
+        if let directory = await resolver.installedDirectory(forModelID: repository) {
+            return .installedDirectory(directory)
+        }
+        return .pretrained(repository)
     }
 
     func loadModel(named modelName: String) async throws {
@@ -32,10 +71,23 @@ actor MLXAudioWhisperBackend: WhisperInferenceBackend {
             )
         }
 
-        model = try await WhisperModel.fromPretrained(
-            Self.resolvedModelName(for: modelName),
-            cache: cache
-        )
+        switch await Self.resolveSource(for: modelName, using: modelDirectoryResolver) {
+        case .installedDirectory(let directory):
+            model = try await WhisperModel.fromDirectory(directory, cache: cache)
+            loadedDirectory = directory
+        case .pretrained(let repository):
+            model = try await WhisperModel.fromPretrained(repository, cache: cache)
+            loadedDirectory = nil
+        }
+    }
+
+    func unload() {
+        model = nil
+        loadedDirectory = nil
+    }
+
+    func loadedModelDirectory() -> URL? {
+        loadedDirectory
     }
 
     static func resolvedModelName(for modelName: String) -> String {
@@ -84,9 +136,17 @@ actor MLXAudioWhisperBackend: WhisperInferenceBackend {
 public actor MLXWhisperEngine: WhisperEngineProtocol {
     private let backend: any WhisperInferenceBackend
     private var loadedModelName: String?
+    /// Transcriptions in flight. `transcribe` suspends while the backend runs, so an eviction
+    /// request can interleave with it; this is what lets one refuse the other.
+    private var activeTranscriptions = 0
 
     public init() {
         backend = MLXAudioWhisperBackend()
+    }
+
+    /// Loads from the model store when the identifier is installed, downloading otherwise.
+    public init(modelDirectoryResolver: any ModelDirectoryResolving) {
+        backend = MLXAudioWhisperBackend(modelDirectoryResolver: modelDirectoryResolver)
     }
 
     init(backend: any WhisperInferenceBackend) {
@@ -126,6 +186,9 @@ public actor MLXWhisperEngine: WhisperEngineProtocol {
 
         guard !chunk.samples.isEmpty else { return nil }
 
+        activeTranscriptions += 1
+        defer { activeTranscriptions -= 1 }
+
         do {
             let text = try await backend.transcribe(
                 samples: chunk.samples,
@@ -143,5 +206,44 @@ public actor MLXWhisperEngine: WhisperEngineProtocol {
                 "Whisper could not transcribe the current audio window. \(error.localizedDescription)"
             )
         }
+    }
+}
+
+/// Residency reporting for the Model Manager.
+///
+/// A loaded model is not by itself a reason to refuse deletion — the engine keeps one loaded for
+/// the whole of a session, and an idle session should not block the user from freeing space. What
+/// must be refused is eviction while audio is actually being transcribed, because dropping the
+/// weights mid-window fails the request in progress. That is what `activeTranscriptions` counts.
+///
+/// Deleting between windows remains possible, and `ModelManager` is expected to hold its own lease
+/// for the length of a session once composition wires it in.
+extension MLXWhisperEngine: LocalModelResidencyReporting {
+    public func residentModelDirectories() async -> Set<URL> {
+        guard let directory = await backend.loadedModelDirectory() else { return [] }
+        return [directory]
+    }
+
+    public func leaseCount(at directory: URL) async -> Int {
+        await holdsModel(at: directory) ? activeTranscriptions : 0
+    }
+
+    public func requestEviction(at directory: URL) async -> Bool {
+        guard await holdsModel(at: directory) else { return true }
+        guard activeTranscriptions == 0 else { return false }
+
+        // Clear state synchronously before the await so a `transcribe()` call that interleaves
+        // during `unload()` fails fast instead of racing the unload.
+        loadedModelName = nil
+        await backend.unload()
+        return true
+    }
+
+    private func holdsModel(at directory: URL) async -> Bool {
+        let normalized = directory.standardizedFileURL.resolvingSymlinksInPath()
+        let loaded = await backend.loadedModelDirectory()?
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        return loaded == normalized
     }
 }

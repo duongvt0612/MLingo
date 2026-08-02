@@ -176,6 +176,13 @@ private actor StubWhisperBackend: WhisperInferenceBackend {
         languages.append(language)
         return transcripts.isEmpty ? "" : transcripts.removeFirst()
     }
+
+    private(set) var unloadCount = 0
+    var directory: URL?
+
+    func unload() { unloadCount += 1 }
+    func loadedModelDirectory() -> URL? { directory }
+    func setDirectory(_ url: URL?) { directory = url }
 }
 
 private actor FailingWhisperBackend: WhisperInferenceBackend {
@@ -187,6 +194,8 @@ private actor FailingWhisperBackend: WhisperInferenceBackend {
 
     func loadModel(named modelName: String) async throws { throw error }
     func transcribe(samples: [Float], language: String) async throws -> String { "" }
+    func unload() {}
+    func loadedModelDirectory() -> URL? { nil }
 }
 
 private func audioChunk(duration: TimeInterval, timestamp: TimeInterval) -> AudioChunk {

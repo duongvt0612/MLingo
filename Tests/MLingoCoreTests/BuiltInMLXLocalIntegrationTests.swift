@@ -64,6 +64,17 @@ func builtInMLXLocalEmbeddingModelEmbedsWhenEnabled() async throws {
         let norm = sqrt(vector.reduce(Double(0)) { $0 + Double($1 * $1) })
         #expect(abs(norm - 1) < 0.001)
     }
+
+    // Matching shapes and norms would still hold if the values themselves drifted between calls,
+    // which is what "deterministic" is actually claiming. Compare element by element.
+    let tolerance: Float = 1e-5
+    for (index, pair) in zip(first.vectors, second.vectors).enumerated() {
+        let largestDifference = zip(pair.0, pair.1).map { abs($0 - $1) }.max() ?? 0
+        #expect(
+            largestDifference <= tolerance,
+            "vector \(index) drifted by \(largestDifference), beyond the \(tolerance) tolerance"
+        )
+    }
 }
 
 private var shouldRunLocalMLXTests: Bool {
