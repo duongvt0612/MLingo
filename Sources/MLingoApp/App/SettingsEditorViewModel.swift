@@ -245,6 +245,9 @@ final class SettingsEditorViewModel {
             target = .provider(profileID, validationIssue)
         case .invalidSelection(let capability, _):
             target = .capability(capability)
+        case .emptyCredentialReplacement(let credentialID)
+            where credentialID == ModelManager.huggingFaceCredentialID:
+            target = .huggingFaceToken
         case .emptyCredentialReplacement(let credentialID):
             guard let profileID = draft.profiles.first(where: {
                 $0.credentialID == credentialID

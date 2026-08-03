@@ -402,3 +402,43 @@ private func settingsCoordinatorProfile(
         models: [.translation: ["model"]]
     )
 }
+
+@Test
+func snapshotReportsWhetherTheHuggingFaceTokenIsStoredEvenWithoutAProfile() async throws {
+    // The token belongs to the model store, not to any provider profile, so nothing else would
+    // put it in the presence map — and the Models pane needs to know whether one is saved.
+    let credentialStore = SettingsCoordinatorCredentialStore(
+        values: [ModelManager.huggingFaceCredentialID: "hf_token"]
+    )
+    let coordinator = SettingsPersistenceCoordinator(
+        settingsStore: SettingsCoordinatorSettingsStore(settings: AppSettings()),
+        profileStore: SettingsCoordinatorProfileStore(configuration: ProviderConfiguration()),
+        credentialStore: credentialStore
+    )
+
+    let snapshot = try await coordinator.load(overlaySelection: .automatic)
+
+    #expect(snapshot.credentialPresence[ModelManager.huggingFaceCredentialID] == true)
+}
+
+@Test
+func committingAHuggingFaceTokenWritesItToKeychainLikeAnyOtherCredential() async throws {
+    let credentialStore = SettingsCoordinatorCredentialStore()
+    let coordinator = SettingsPersistenceCoordinator(
+        settingsStore: SettingsCoordinatorSettingsStore(settings: AppSettings()),
+        profileStore: SettingsCoordinatorProfileStore(configuration: ProviderConfiguration()),
+        credentialStore: credentialStore
+    )
+    var draft = SettingsEditorDraft(
+        appSettings: AppSettings(),
+        profiles: [],
+        selections: [:],
+        overlaySelection: .automatic
+    )
+    draft.credentialMutations[ModelManager.huggingFaceCredentialID] = .replace(" hf_token ")
+
+    let snapshot = try await coordinator.commit(draft, activeCredentialID: nil)
+
+    #expect(credentialStore.value(for: ModelManager.huggingFaceCredentialID) == "hf_token")
+    #expect(snapshot.credentialPresence[ModelManager.huggingFaceCredentialID] == true)
+}

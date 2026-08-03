@@ -152,22 +152,11 @@ private struct SettingsEditorContent: View {
     }
 
     private var modelsPage: some View {
-        Form {
-            Section("Speech recognition") {
-                TextField("Whisper model ID", text: $editor.draft.appSettings.whisperModel)
-                    .accessibilityLabel("Whisper model identifier")
-                    .focused($focusedAppField, equals: .whisperModel)
-                appValidationMessage(for: .whisperModel)
-            }
-            Section {
-                Label(
-                    "Model downloads, verification, storage, and deletion arrive with Model Manager in Milestone 08.",
-                    systemImage: "shippingbox"
-                )
-                .foregroundStyle(.secondary)
-            }
-        }
-        .settingsFormStyle()
+        ModelsSettingsView(
+            viewModel: viewModel,
+            editor: editor,
+            focusedAppField: $focusedAppField
+        )
     }
 
     private var translationPage: some View {
@@ -402,7 +391,8 @@ struct SettingsValidationMessage: View {
     }
 }
 
-private extension View {
+extension View {
+    /// Shared by every Settings page, including `ModelsSettingsView`.
     func settingsFormStyle() -> some View {
         formStyle(.grouped)
             .scrollContentBackground(.hidden)

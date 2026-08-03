@@ -176,10 +176,13 @@ enum SettingsFocusTarget: Equatable, Sendable {
     case provider(UUID, ProviderProfileValidationIssue)
     case capability(ModelCapability)
     case credential(UUID)
+    /// The model store's own credential. It belongs to no profile, so `credential(UUID)` cannot
+    /// address it.
+    case huggingFaceToken
 
     var destination: SettingsDestination {
         switch self {
-        case .appSettings(.whisperModel):
+        case .appSettings(.whisperModel), .huggingFaceToken:
             .models
         case .appSettings(.sourceLanguage), .appSettings(.targetLanguage):
             .translation

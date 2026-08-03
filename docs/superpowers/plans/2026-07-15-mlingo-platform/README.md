@@ -2,8 +2,8 @@
 
 **Design:** [Platform design](../../specs/2026-07-15-mlingo-platform-design.md)
 
-**Status:** Milestones 01-02, 05-07 complete; Milestone 03 implementation complete with its
-loopback live proof deferred by owner waiver; Milestone 04 code-complete with manual
+**Status:** Milestones 01-02, 05-07 and 08a complete; Milestone 03 implementation complete with its
+loopback live proof deferred by owner waiver; Milestones 04 and 08b code-complete with manual
 accessibility acceptance pending. Milestone 08 is split into 08a (headless core) and 08b (UI).
 **Execution rule:** Complete and verify one milestone before starting the next. The owner
 has explicitly waived the external loopback proof for Milestone 03 until Ollama or LM
@@ -97,4 +97,16 @@ Run a native Xcode Release build whenever a dependency, resource, entitlement, s
   `docs/superpowers/specs/2026-07-28-model-manager-design.md`. Byte-range resume is recorded
   as a deliberate non-goal: `resumeDownloadFile` has no call site in swift-huggingface 0.9.0,
   so cancellation restarts a file from zero while completed files still resume per file.
+- 2026-08-03: Milestone 08b is code-complete. The Models pane lists every catalog entry with its
+  state, size, pinned revision and storage usage; download, cancel, retry and delete reach
+  `ModelManager` through a new `ModelCatalogManaging` seam, deletion asks twice and is disabled
+  while a session runs, and every typed recovery action renders as one working control next to the
+  model it belongs to. `MLingoViewModel.live()` now composes the model store: `MLXWhisperEngine`
+  receives the manager as its directory resolver, and a `CompositeModelResidencyReporter` speaks
+  for both the MLX runtime and the Whisper engine before anything is deleted. The Hugging Face
+  token reuses Milestone 04's transactional credential path, adding only a focus target of its own
+  because it belongs to no provider profile. The suite passes 470 tests, up from 433; SwiftPM
+  Release, whitespace, and the native archive/signature/export gate pass; the exported Release app
+  launches and creates its model store. The manual accessibility pass is not done and is the only
+  thing between this milestone and complete.
 - 2026-07-21: Milestone 07 is code-complete after a deep comparison with `dev`. Review fixes enforce one shared MLX residency policy, per-request chat sessions, cancellable coalesced loads, built-in-kind local-only routing, host-level available-memory preflight, logical model sizing, and strict embedding-shape validation. Focused suites pass 12 BuiltInMLX and 2 HTTP-factory tests; the full suite passes 310 tests; SwiftPM Release and the native arm64 archive/signature/export gate pass. The real installed-model offline, deterministic-embedding, and no-network proof remains unchecked because its opt-in model directories were unavailable. GitNexus was refreshed but still cannot index Swift symbols, so direct source/reference and upstream-package audits are authoritative.

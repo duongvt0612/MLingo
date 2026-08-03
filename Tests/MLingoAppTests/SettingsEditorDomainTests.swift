@@ -260,3 +260,22 @@ func invalidSaveRoutesToAndRequestsFocusForTheFirstInvalidField() async {
     #expect(editor.focusRequest?.target == .appSettings(.whisperModel))
     #expect(editor.saveError == "Review the highlighted settings before saving.")
 }
+
+@Test @MainActor
+func anEmptyHuggingFaceTokenRoutesSaveBackToTheModelsPane() async {
+    // The token has no profile behind it, so the profile lookup used for provider credentials
+    // finds nothing; without its own focus target an invalid save would fail silently.
+    let editor = SettingsEditorViewModel(snapshot: SettingsEditorSnapshot(
+        appSettings: AppSettings(),
+        configuration: ProviderConfiguration(),
+        overlaySelection: .automatic,
+        credentialPresence: [:]
+    ))
+    editor.selectedDestination = .privacy
+    editor.draft.credentialMutations[ModelManager.huggingFaceCredentialID] = .replace("   ")
+
+    #expect(!(await editor.save()))
+
+    #expect(editor.selectedDestination == .models)
+    #expect(editor.focusRequest?.target == .huggingFaceToken)
+}

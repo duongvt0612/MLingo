@@ -84,6 +84,30 @@ func runtimeReportsNothingForAnUnknownDirectory() async throws {
     #expect(await runtime.requestEviction(at: URL(fileURLWithPath: "/tmp/never-loaded")))
 }
 
+@Test
+func providerExposesItsRuntimeResidencyToTheComposition() async throws {
+    let directory = try TemporaryDirectory(label: "Residency")
+    defer { directory.remove() }
+    let runtime = BuiltInMLXRuntime(
+        chatLoader: { _ in ResidencyChatRunner() },
+        idleUnloadDelay: .seconds(600)
+    )
+    // `BuiltInMLXRuntime` is internal, so the app can only reach its residency through the
+    // provider it already composes.
+    let reporting: any LocalModelResidencyReporting = BuiltInMLXProvider(runtime: runtime)
+        .residencyReporting
+
+    _ = try await runtime.respond(
+        model: directory.url.path,
+        messages: [ChatMessage(role: .user, content: "hi")]
+    )
+
+    #expect(await reporting.residentModelDirectories()
+        .contains(directory.url.resolvingSymlinksInPath().standardizedFileURL))
+    #expect(await reporting.requestEviction(at: directory.url))
+    #expect(await reporting.residentModelDirectories().isEmpty)
+}
+
 // MARK: - Deletion guard
 
 @Test

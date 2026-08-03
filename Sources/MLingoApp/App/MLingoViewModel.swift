@@ -104,6 +104,11 @@ final class MLingoViewModel {
     private let providerMigration: (any ProviderMigrationProtocol)?
     private let profileStore: (any ProviderProfileStoreProtocol)?
     private let credentialStore: (any ProviderCredentialStoreProtocol)?
+    /// Absent when model storage could not be opened; the Models pane reports that rather than
+    /// showing an empty catalog.
+    let modelCatalogManager: (any ModelCatalogManaging)?
+    /// Where the store lives, for the "reveal in Finder" recovery actions.
+    let modelStorageRoot: URL?
     private let translationTestEngineFactory: TranslationTestEngineFactory
     private var startTask: Task<Void, Never>?
     private var activeSessionID = UUID()
@@ -125,6 +130,8 @@ final class MLingoViewModel {
         providerMigration: (any ProviderMigrationProtocol)? = nil,
         profileStore: (any ProviderProfileStoreProtocol)? = nil,
         credentialStore: (any ProviderCredentialStoreProtocol)? = nil,
+        modelCatalogManager: (any ModelCatalogManaging)? = nil,
+        modelStorageRoot: URL? = nil,
         translationTestEngineFactory: @escaping TranslationTestEngineFactory
     ) {
         self.settings = settings
@@ -135,6 +142,8 @@ final class MLingoViewModel {
         self.providerMigration = providerMigration
         self.profileStore = profileStore
         self.credentialStore = credentialStore
+        self.modelCatalogManager = modelCatalogManager
+        self.modelStorageRoot = modelStorageRoot
         self.translationTestEngineFactory = translationTestEngineFactory
         whisperDiagnostics.modelID = settings.whisperModel
     }
@@ -165,9 +174,16 @@ final class MLingoViewModel {
             }
         )
         let audioEngineFactory = SystemAudioEngineFactory()
+        // Whisper loads from the model store when the identifier is installed and downloads as
+        // before when it is not, so an existing installation keeps working.
+        let modelStore = ModelStoreComposition(
+            root: try? ModelStorageLayout.defaultRoot(),
+            credentialStore: credentialStore,
+            runtimeResidency: [builtInMLXProvider.residencyReporting]
+        )
         let runtime = SessionOrchestrator(
             audioEngineFactory: audioEngineFactory,
-            whisperEngine: MLXWhisperEngine(),
+            whisperEngine: modelStore?.whisperEngine ?? MLXWhisperEngine(),
             translationEngine: translation,
             overlayEngine: overlay,
             settingsStore: settingsStore
@@ -182,6 +198,8 @@ final class MLingoViewModel {
             providerMigration: migration,
             profileStore: profileStore,
             credentialStore: credentialStore,
+            modelCatalogManager: modelStore?.manager,
+            modelStorageRoot: modelStore?.storageRoot,
             translationTestEngineFactory: { apiKey in
                 OpenAITranslationEngine(
                     apiKeyStore: TransientAPIKeyStore(apiKey: apiKey)

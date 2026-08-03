@@ -174,9 +174,11 @@ actor SettingsPersistenceCoordinator {
         configuration: ProviderConfiguration,
         overlaySelection: OverlayDisplaySelection
     ) throws -> SettingsEditorSnapshot {
+        // The Hugging Face token belongs to the model store rather than to a profile, so it is
+        // added explicitly; otherwise the Models pane could not tell a saved token from none.
         let credentialIDs = Set(configuration.profiles.compactMap {
             $0.authentication.credentialID
-        })
+        }).union([ModelManager.huggingFaceCredentialID])
         var presence: [CredentialID: Bool] = [:]
         for id in credentialIDs {
             presence[id] = try credentialStore.loadCredential(for: id) != nil

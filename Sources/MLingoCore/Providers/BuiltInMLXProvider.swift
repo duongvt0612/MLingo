@@ -39,6 +39,13 @@ public final class BuiltInMLXProvider: TranslationProvider,
         self.runtime = runtime
     }
 
+    /// The runtime's residency, for the Model Manager to consult before a delete.
+    ///
+    /// `BuiltInMLXRuntime` is internal because its residency tables are, so this is the only way
+    /// the composition root can hand the manager something that speaks for loaded chat and
+    /// embedding weights.
+    public var residencyReporting: any LocalModelResidencyReporting { runtime }
+
     public func translate(_ request: TranslationProviderRequest) async throws -> SubtitleItem {
         let currentText = request.translation.current.text
             .trimmingCharacters(in: .whitespacesAndNewlines)
